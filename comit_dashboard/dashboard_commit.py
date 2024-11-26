@@ -863,6 +863,7 @@ dashboard = pn.Column(
     panelConfig,
     pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ⚙️ IT performances</h2></div>"),
     panel_level_noise,
+    pn.Card("📜")
     
 )
 
