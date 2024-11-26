@@ -802,7 +802,7 @@ panelConfig = pn.Row(
     pn.Column(
         TableConfig(df=config_df, config_selector=config_selector),
         pn.Tabs(
-            ('𝄃𝄃𝄂𝄂𝄀𝄁𝄃𝄂𝄂𝄃 BER/FER', pn.bind(plot_performance_metrics_plotly, config_selector.param.value, noiseScale.param.value)),
+            ('ılıılıılıılıılıılı BER/FER', pn.bind(plot_performance_metrics_plotly, config_selector.param.value, noiseScale.param.value)),
             ('⫘⫘⫘ Mutual information', mi_panel)
         ),
         sizing_mode="stretch_width"
@@ -857,9 +857,9 @@ panel_Performances = pn.Column(
 
 # Layout du tableau de bord avec tout dans une colonne et des arrières-plans différents
 dashboard = pn.Column(
-    pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> 📰 📶  📚  📒 📖 📊 Git</h2></div>"),
+    pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2>  Git</h2></div>"),
     panelCommit,
-    pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> 📶 Business performances </h2></div>"),
+    pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2>  Business performances </h2></div>"),
     panelConfig,
     pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ⚙️ IT performances</h2></div>"),
     panel_level_noise,   
