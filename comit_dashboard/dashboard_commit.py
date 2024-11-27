@@ -13,6 +13,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 import param
 from panel.viewable import Viewer
+import unicodedata as ud
+
+print(ud.unidata_version)
 
 #from uncertainty_button import Panel_graph_envelope
 
@@ -438,7 +441,7 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
 class Research_config_filter(pn.viewable.Viewer):
     # Paramètres configurables
     df = param.DataFrame(doc="Le dataframe contenant les données")
-    config_selector = param.ClassSelector(default=None, class_=pn.widgets.MultiChoice, doc="Widget MultiChoice")
+    config_selector = param.ClassSelector(default=None, class_=pn.widgets.MultiChoice, doc="Widget MultiChoice", allow_refs=False)
     def __init__(self, **params):
         super().__init__(**params)
         
