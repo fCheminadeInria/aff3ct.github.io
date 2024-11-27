@@ -281,7 +281,7 @@ class Tasks_Histogramme(pn.viewable.Viewer):
         if event.new : 
             self.button_time_perc.name = '%'
         else :
-            self.button_time_perc.name = '🕑'
+            self.button_time_perc.name = '⏱'
     
     def __panel__(self):
         return pn.Row(self.ListBouton, self.graphPanel)
