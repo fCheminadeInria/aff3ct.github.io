@@ -482,7 +482,7 @@ class Research_config_filter(pn.viewable.Viewer):
         self.accordion_families = pn.Accordion(*[(f"{family}", widget) for family, widget in family_widgets.items()])
         
     def __panel__(self):
-        return pn.Card(self.accordion_families, title="🔍 Filtres de recherche")
+        return pn.Card(self.accordion_families, title="🔍\t Filtres de recherche")
     
     def _filter_config(self, config_df, config_allowed):
         # Filtre le DataFrame en fonction des valeurs définies dans config_allowed
