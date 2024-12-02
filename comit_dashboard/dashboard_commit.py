@@ -876,9 +876,15 @@ styles = {
     "padding": "10px",
   }
 
+
+#logo = pn.pane.Image("/home/fchemina/aff3ct.github.io/comit_dashboard/image/2ada77c3-f7d7-40ae-8769-b77cc3791e84.webp")
+#logo = pn.pane.Image("https://raw.githubusercontent.com/fCheminadeInria/aff3ct.github.io/refs/heads/master/comit_dashboard/image/2ada77c3-f7d7-40ae-8769-b77cc3791e84.webp")
+logo = pn.pane.Image("https://raw.githubusercontent.com/fCheminadeInria/aff3ct.github.io/refs/heads/master/comit_dashboard/image/93988066-1f77-4b42-941f-1d5ef89ddca2.webp")
+
+
 dashboard= pn.template.FastListTemplate(
     title="Commits Dashboard",
-    sidebar=[pn.pane.Image("https://github.com/fCheminadeInria/aff3ct.github.io/blob/master/comit_dashboard/image/431ba575-dd6f-422e-b843-7e6c826a3b78.webp"), panelData, pn.layout.Divider(), paramSite],
+    sidebar=[logo, panelData, pn.layout.Divider(), paramSite],
     main=[dashboard],
     main_layout=None,
     accent=ACCENT,
