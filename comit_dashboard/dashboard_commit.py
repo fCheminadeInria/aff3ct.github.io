@@ -862,7 +862,7 @@ panel_Performances = pn.Column(
 dashboard = pn.Column(
     pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ✏️ Git</h2></div>"),
     panelCommit,
-    pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ☎️ Business performances </h2></div>"),
+    pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ☎️ Performances métiers </h2></div>"),
     panelConfig,
     pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ⚙️ IT performances</h2></div>"),
     panel_level_noise,
