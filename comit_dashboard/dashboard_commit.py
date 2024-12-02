@@ -878,7 +878,7 @@ styles = {
 
 dashboard= pn.template.FastListTemplate(
     title="Commits Dashboard",
-    sidebar=[panelData, pn.layout.Divider(), paramSite],
+    sidebar=[pn.pane.Image("https://github.com/fCheminadeInria/aff3ct.github.io/blob/master/comit_dashboard/image/431ba575-dd6f-422e-b843-7e6c826a3b78.webp"), panelData, pn.layout.Divider(), paramSite],
     main=[dashboard],
     main_layout=None,
     accent=ACCENT,
