@@ -508,22 +508,28 @@ class Research_config_filter(pn.viewable.Viewer):
 class TableConfig(pn.viewable.Viewer):
     df = param.DataFrame(doc="Le dataframe contenant les données")
     config_selector = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
-    
+    meta = param.Boolean(doc="affiche les Meta-données si Vrai, les paramètres de simmulation si faux")
     def __init__(self, **params):
         super().__init__(**params)
-        filtered_df = self.df.filter(regex=r"^(Meta|Simulation)\.")
-        filtered_df.columns = filtered_df.columns.str.replace(r"^(Meta\.|Simulation\.)", "", regex=True)
-        filtered_df = filtered_df.loc[self.config_selector.value]
-        self.tab =  pn.pane.DataFrame(filtered_df, name='table.selected_config', text_align = 'center', index=False)
+        self.tab =  pn.pane.DataFrame(self.prepare(), name='table.selected_config', text_align = 'center', index=False)
 
     def __panel__(self):
         return pn.Accordion( ("📥 Selected Configuration", self.tab))
     
     @param.depends('config_selector.value', watch=True)
     def table_selected_config_filter(self):
-        filtered_df  = self.df.loc[config_selector.value].filter(regex=r"^(Meta|Simulation)\.")
+
+        self.tab.object = self.prepare()
+
+    def prepare(self):
+        if self.meta :
+            filtered_df = self.df.filter(regex=r"^(Meta)\.")
+        else :
+            filtered_df = self.df.filter(regex=r"^(Simulation)\.")
+        
         filtered_df.columns = filtered_df.columns.str.replace(r"^(Meta\.|Simulation\.)", "", regex=True)
-        self.tab.object = filtered_df
+        filtered_df = filtered_df.loc[self.config_selector.value]
+        return filtered_df
 
 
 ##################################### Chargement ####################################
@@ -803,7 +809,7 @@ panelConfig = pn.Row(
     #pn.Column(select_all_button, clear_button, config_selector, research_config_filter, width=300),
     config_selector,
     pn.Column(
-        TableConfig(df=config_df, config_selector=config_selector),
+        TableConfig(df=config_df, config_selector=config_selector, meta=False),
         pn.Tabs(
             ('ılıılıılıılıılıılı BER/FER', pn.bind(plot_performance_metrics_plotly, config_selector.param.value, noiseScale.param.value)),
             ('⫘⫘⫘ Mutual information', mi_panel)
@@ -844,6 +850,7 @@ plot_latence = Panel_graph_envelope(
 )    
     
 panel_level_noise = pn.Column(
+    TableConfig(df=config_df, config_selector=config_selector, meta=True),
     task_Time_Histogramme,
     plot_latence,
     plot_debit,
