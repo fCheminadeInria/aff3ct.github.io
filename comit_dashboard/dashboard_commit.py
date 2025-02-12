@@ -5,8 +5,11 @@ import sys
 import os
 import argparse
 import re
-from pyodide.http import open_url
-import matplotlib.pyplot as plt
+try:
+    from pyodide.http import open_url
+except ModuleNotFoundError:
+    # Utiliser un fallback avec urllib en environnement standard
+    from urllib.request import urlopen as open_url
 #import numpy as np
 import plotly.graph_objs as go
 import plotly.express as px
