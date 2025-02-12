@@ -1,0 +1,75 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+<meta http-equiv="content-type" content="text/html;charset=utf-8" />
+<title>Layout by DENERGIUM</title>
+<link rel="stylesheet" href="image/denergium.css" type="text/css" />
+</head>
+<body>
+<H1> <CENTER><B>The Energy<font color="#118811">Scopium</font> Software Suite</B></CENTER></H1>
+<H2> <CENTER><B>By D<font color="#118811">E</font>N<font color="#118811">E</font>R<font color="#118811">G</font>I<font color="#118811">U</font>M</B></CENTER></H2>
+
+<CENTER><IMG SRC="./image//denergium_logo.png" WIDTH="100"></CENTER>
+<H1> Energy<font color="#118811">Scopium R</font>eport</B></H1>
+support@energyscopium.com<BR>https://www.linkedin.com/company/denergium<BR>Date of the report: 2025/01/14 15:10:09<BR><H2> GENERAL INFORMATION</H2>
+<LI> Jobid: test3</LI>
+<LI> Command: (no information)</LI>
+<LI> Date of run: 2025/01/14 14:58:32</LI>
+<LI> Duration (energy acquisition): 26 (sec)</LI>
+<H2> ARCHITECTURE INFORMATION</H2>
+<LI> Nodelist: devel01</LI>
+<LI> Processors type: Intel(R)Xeon(R)Gold6240CPU@2.60GHz (TDP=150W)</LI>
+<LI> GPU type: none</LI>
+<H2> ENERGY DATA</H2>
+<LI> Ratio Energy / Duration= 68.4 (J/sec) </LI>
+<LI> Application energy consumption measurement: 1779 (J) 0.0005 (kWh)</LI>
+<LI> Global application energy consumption estimation: 3339 (J) 0.0009 (kWh)</LI>
+<LI> Global application carbon production estimation (FR): 0.051 (gCO2)</LI>
+<LI> Energy efficiency (ref TDP): 20.67 (%)</LI>
+<LI> Application label:</LI>
+
+<CENTER><IMG SRC="./image/denergium_label_E.jpg" WIDTH="300"></CENTER>
+
+<CENTER>
+
+<TABLE BORDER=1>
+<TR><TD><B><font color=#38761d> > 90</font></B> </TD><TD> <B><font color=#38761d> A</font></B></TD></TR><TR><TD><B><font color=#6aa84f> 70-90</font></B> </TD><TD> <B><font color=#6aa84f> B</font></B></TD></TR><TR><TD><B><font color=#b6d7a8> 50-70</font></B> </TD><TD> <B><font color=#b6d7a8> C</font></B></TD></TR><TR><TD><B><font color=#FFFF00> 30-50</font></B> </TD><TD> <B><font color=#FFFF00> D</font></B></TD></TR><TR><TD><B><font color=#FF9900> 10-30</font></B> </TD><TD> <B><font color=#FF9900> E</font></B></TD></TR><TR><TD><B><font color=#FF0000> 0-10</font></B> </TD><TD> <B><font color=#FF0000> F</font></B></TD></TR>
+</TABLE>
+
+</CENTER>
+<LI> Global Eprofile:</LI>
+
+<IMG SRC="./image/energyscopium_plot_test3_global.png" WIDTH="1200">
+<H2> ENERGY ACQUISITION INFORMATION</H2>
+<LI> Period (ms): 1046.6</LI>
+<LI> Acquisition quality (low, medium, high): high</LI>
+<LI> Information dumped: ecpu edram </LI>
+<LI> Application running in exclusive mode: unknown (['unknown', 'yes', 'no'])</LI>
+<LI> Energy Acquisition mode: server (['server', 'application-thread', 'application-process'])</LI>
+<LI> Energy Acquisition covers all servers: yes</LI>
+<H2> ENERGY BEHAVIOR</H2>
+<H3> SUMMARY</H3>
+
+<TABLE BORDER=1>
+<TR><TD></TD><TD> node </TD><TD> cpu/gpu </TD><TD> model </TD><TD> TDP (W) </TD><TD> Energy (J) </TD><TD> efficiency (%) </TD><TD> Cores Temp (C) </TD><TD></TD></TR><TR><TD></TD><TD>-----</TD><TD>-----</TD><TD>-----</TD><TD>-----</TD><TD>-----</TD><TD>-----</TD><TD>-----</TD><TD></TD></TR><TR><TD></TD><TD> node devel01 </TD><TD> </TD><TD> </TD><TD> </TD><TD> </TD><TD> </TD><TD> </TD><TD></TD></TR><TR><TD></TD><TD> </TD><TD> cpu 0 </TD><TD> Intel(R)Xeon(R)Gold6240CPU@2.60GHz </TD><TD> 150 </TD><TD> 953 </TD><TD> <B><font color=#FF9900> 21.7</font></B> </TD><TD> none </TD><TD> </TD></TR><TR><TD></TD><TD> </TD><TD> cpu 1 </TD><TD> Intel(R)Xeon(R)Gold6240CPU@2.60GHz </TD><TD> 150 </TD><TD> 826 </TD><TD> <B><font color=#FF9900> 19.6</font></B> </TD><TD> none </TD><TD> </TD></TR>
+</TABLE>
+<H3> PROFILES</H3>
+<LI>node devel01/0</LI>
+
+<IMG SRC="./image/energyscopium_plot_test3_devel01-0.png" WIDTH="1200">
+<LI>node devel01/1</LI>
+
+<IMG SRC="./image/energyscopium_plot_test3_devel01-1.png" WIDTH="1200">
+<H2> DEFINITION</H2>
+<LI><B>TDP:</B> (source Intel) TDP stands for Thermal Design Power, in watts, and refers to the power consumption under the maximum theoretical load.  Power consumption is less than TDP under lower loads. The TDP is the maximum power that one should be designing the system for. This ensures operation to published specs under the maximum theoretical workload.</LI>
+<LI><B>Application energy consumption measurement:</B> the sum of all measurements made on each processor and GPU present during application execution</LI>
+<LI><B>Global application energy consumption estimation:</B> Based on the data read, a model developed by DENERGIUM estimates the server's energy consumption during application execution. The model is parameterized for computing servers. The thermal part (cooling system) is not included in the model.</LI>
+<LI><B>The energy efficiency label</B> was introduced by DENERGIUM in 2023.<BR>The label is based on:<BR> - Measure: the ratio of energy consumed by Processors (packages) and GPUs (all) divided by the sum of TDP (Thermal Design Power)<BR> - Indicator: The ratio is a relevant indicator for measuring energy efficiency<BR> - Limitation: The ratio is not sufficient to assess whether an application is energy-optimized</LI>
+<LI><B>Period (ms):</B> mean of the energy acquisition period</LI>
+<LI><B>Acquisition quality (low, medium, high):</B> indicates the quality of the acquisition in relation to the acquisition period. High means that the initial period was obtained during the entire application run, Low means that several periods were detected without energy data. This is usually due to system overload. The consequence may be minor errors in the data generated. As acquisition quality is not normalized according to the duration of the application, a long-running application may have low acquisition quality, even if the acquisition has been running nominally for 99% of the runtime.</LI>
+<LI><B>Information dumped:</B> the energy data available depends on the hardware technology. Intel processors provide the CPU (package) and DRAM, AMD processors provide the CPU (package), NVIDIA GPUs provide an overall module value</LI>
+<LI><B>Application running in exclusive mode (['unknown', 'yes', 'no']):</B> EnergyScopium detects whether or not the application was running alone</LI>
+<LI><B>Energy Acquisition mode (['server', 'application-thread', 'application-process']):</B> the algorithm used may or may not separate sources (source separation is application) during acquisition. When the acquisition mode is application, idle energy, i.e. energy consumed independently of applications, is shared between users. As a result, there may be variations in consumption that are not correlated with the application itself.</LI>
+<LI><B>Energy Acquisition covers all servers:</B> sometimes energy data are missing to complete the profile</LI>
+
+</body></html>
