@@ -933,6 +933,7 @@ panelConfig = pn.Row(
             ('ılıılıılıılıılıılı BER/FER', pn.bind(plot_performance_metrics_plotly, config_selector.param.value, noiseScale.param.value)),
             ('⫘⫘⫘ Mutual information', mi_panel)
         ),
+        pn.pane.HTML("<div style='font-size: 20px;background-color: #e0e0e0; padding: 5px;line-height : 0px;'><h2> ✏️ Logs</h2></div>"),
         LogViewer(df=config_df, config_selector=config_selector),
         sizing_mode="stretch_width"
     )
