@@ -60,9 +60,9 @@ class ConfigPanel(pn.viewable.Viewer) :
             width=300)
     
     
-    def _update_value(self, event):
+    def _update_value(self, event = None):
         # Met à jour `self.value` en fonction des configurations sélectionnées
-        selected_configs = event.new
+        selected_configs = self.config_selector.value
         if len(selected_configs) !=0 :
             self.value = self.df[ self.df["Config_Alias"].isin(selected_configs)].index.tolist()
         else :
@@ -511,7 +511,7 @@ class TableConfig(pn.viewable.Viewer):
     meta = param.Boolean(doc="affiche les Meta-données si Vrai, les paramètres de simmulation si faux")
     def __init__(self, **params):
         super().__init__(**params)
-        self.tab =  pn.pane.DataFrame(self.prepare(), name='table.selected_config', text_align = 'center', index=False)
+        self.tab =  pn.pane.DataFrame(self._prepare(), name='table.selected_config', text_align = 'center', index=False)
 
     def __panel__(self):
         return pn.Accordion( ("📥 Selected Configuration", self.tab))
@@ -519,9 +519,9 @@ class TableConfig(pn.viewable.Viewer):
     @param.depends('config_selector.value', watch=True)
     def table_selected_config_filter(self):
 
-        self.tab.object = self.prepare()
+        self.tab.object = self._prepare()
 
-    def prepare(self):
+    def _prepare(self):
         if self.meta :
             filtered_df = self.df.filter(regex=r"^(Meta)\.")
         else :
@@ -531,6 +531,125 @@ class TableConfig(pn.viewable.Viewer):
         filtered_df = filtered_df.loc[self.config_selector.value]
         return filtered_df
 
+
+class ConfigUniqueSelector (pn.viewable.Viewer) :
+    df = param.DataFrame(doc="Le dataframe contenant les données")
+    value = param.String(default= '-', allow_refs=True)
+    config_selector = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
+    def __init__ (self, **params):
+        super().__init__(**params)
+        
+        df = self.df.loc[self.config_selector.value]
+        
+        self.radio_group = pn.widgets.RadioBoxGroup(
+            name='Configurations', 
+            options=list(df.Config_Alias) if hasattr(df, 'Config_Alias') else [],
+            value=list(df.Config_Alias)[0]  if len(df.Config_Alias) > 0 else '-', 
+            inline=False )
+        self._update_value()
+        self.radio_group.param.watch(self._update_value, "value")
+
+    def __panel__(self):
+        return pn.Column(
+            pn.pane.Markdown(f"**{self.radio_group.name} :** "),
+            self.radio_group)
+
+    def _update_value(self, event = None):
+        """
+        Met à jour la propriété `value` en fonction de la sélection.
+        """
+        df = self.df.loc[self.config_selector.value]
+        self.value = df['Config_Alias'].get(self.radio_group.value, '-')
+    
+    @param.depends('config_selector.value', watch=True)   
+    def _setLabel(self):
+        df = self.df.loc[self.config_selector.value]
+        if df.empty:
+            # Griser et verrouiller le widget
+            self.radio_group.disabled = True
+            self.radio_group.value = '-'
+            self.radio_group.options = []
+        else:
+            # Réactiver et mettre à jour les options
+            self.radio_group.disabled = False
+            self.radio_group.options = list(df.Config_Alias)
+            self.radio_group.value = df.Config_Alias[0] if len(df.Config_Alias) > 0 else '-'
+
+class LogViewer(pn.viewable.Viewer):
+    df = param.DataFrame(doc="Le dataframe contenant les données")
+    config_selector = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
+    
+    def __init__(self, **params):
+        super().__init__(**params)
+        
+        # Initialisation des onglets
+        self.output_pane = pn.pane.Markdown("Sélectionnez une configuration pour voir les fichiers.")
+        self.error_pane = pn.pane.Markdown("")
+        self.report_pane = pn.pane.HTML("")
+        
+        # Onglets pour afficher les fichiers
+        self.tabs = pn.Tabs(
+            ("📄 Output", pn.Column(self.output_pane, scroll=True, height=600)),
+            ("⚠ Erreur", pn.Column(self.error_pane, scroll=True, height=600)),
+            ("📊 Rapport énergétique par Degenerium", pn.Column(self.report_pane, scroll=True, height=600))
+        )
+        
+        self.radioBoutton = ConfigUniqueSelector(df = self.df, name="One Configuration Selection", config_selector= self.config_selector)
+        # Mise à jour des onglets en fonction de la sélection
+        self.radioBoutton.param.watch(self._update_tabs, "value")
+        # Mettre à jour la sélection dans le panneau
+
+    @param.depends('config_selector.value', watch=True)
+    def _update_tabs(self, event = None):
+        # Récupérer la ligne sélectionnée
+        selected_row = self.df.loc[self.config_selector.value]
+        
+        # Mettre à jour le contenu des onglets
+        self.output_pane.object = f"### Fichier output\n```\n{self.read_file(selected_row, "out")}\n```"
+        self.error_pane.object = f"### Fichier erreur\n```\n{self.read_file(selected_row, "err")}\n```"
+        
+        if args.local :
+            self.report_pane.object = self.read_file(selected_row, "html")
+        else :
+            self.report_pane.object = f"<iframe src='{self.read_file(selected_row, "html")}' width='100%' height='400'></iframe>"
+
+    def __panel__(self):
+        # Affichage du sélecteur et des onglets
+        grid = pn.GridSpec(sizing_mode="stretch_width", ncols=4)
+        grid[0, 0] = self.radioBoutton
+        grid[0, 1:] = self.tabs
+        return grid
+
+    def read_file(self, selected_row, ext):
+        
+        if len(selected_row) == 0 :
+            return ""
+        try:
+            # Accéder à la valeur de 'file_path' dans la série
+            if ext != 'html':
+                path = 'file_path'
+            else :
+                path = 'html_degenerium_path'
+            
+            file_path = selected_row[path] if isinstance(selected_row[path], str) else selected_row[path].values[0]
+            
+            
+            if ext != 'html' or args.local :
+                if file_path:
+                    # Vérification si file_path existe et est valide
+                    with open(args.database_path + file_path + "." + ext, 'r') as file:
+                        return file.read()
+                else:
+                    return f"Le fichier n'a pas de chemin spécifié pour l'extension {ext}."
+            else :
+                return file_path
+
+
+        except FileNotFoundError:
+            return f"Le fichier {ext} est introuvable."
+        except Exception as e:
+            return f"Erreur lors de la lecture du fichier {ext}: {str(e)}"
+   
 
 ##################################### Chargement ####################################
 
@@ -814,8 +933,11 @@ panelConfig = pn.Row(
             ('ılıılıılıılıılıılı BER/FER', pn.bind(plot_performance_metrics_plotly, config_selector.param.value, noiseScale.param.value)),
             ('⫘⫘⫘ Mutual information', mi_panel)
         ),
+        LogViewer(df=config_df, config_selector=config_selector),
         sizing_mode="stretch_width"
     )
+    
+    
 )
 
 ##################################### Performance par niveau de SNR ####################################
