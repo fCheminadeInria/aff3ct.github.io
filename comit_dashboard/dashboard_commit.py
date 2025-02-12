@@ -1,3 +1,7 @@
+from bokeh.settings import settings
+settings.resources = 'inline'
+
+
 import pandas as pd
 import panel as pn
 from datetime import datetime
