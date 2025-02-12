@@ -514,7 +514,7 @@ class TableConfig(pn.viewable.Viewer):
     meta = param.Boolean(doc="affiche les Meta-données si Vrai, les paramètres de simmulation si faux")
     def __init__(self, **params):
         super().__init__(**params)
-        self.tab =  pn.pane.DataFrame(self._prepare(), name='table.selected_config', text_align = 'center', index=False)
+        self.tab =  pn.pane.DataFrame(self._prepare(), name='table.selected_config', index=False)
 
     def __panel__(self):
         return pn.Accordion( ("📥 Selected Configuration", self.tab))
@@ -608,13 +608,13 @@ class LogViewer(pn.viewable.Viewer):
         selected_row = self.df.loc[self.config_selector.value]
         
         # Mettre à jour le contenu des onglets
-        self.output_pane.object = f"### Fichier output\n```\n{self.read_file(selected_row, "out")}\n```"
-        self.error_pane.object = f"### Fichier erreur\n```\n{self.read_file(selected_row, "err")}\n```"
+        self.output_pane.object = f"### Fichier output\n```\n{self.read_file(selected_row, 'out')}\n```"
+        self.error_pane.object  = f"### Fichier erreur\n```\n{self.read_file(selected_row, 'err')}\n```"
         
         if args.local :
-            self.report_pane.object = self.read_file(selected_row, "html")
+            self.report_pane.object = self.read_file(selected_row, 'html')
         else :
-            self.report_pane.object = f"<iframe src='{self.read_file(selected_row, "html")}' width='100%' height='400'></iframe>"
+            self.report_pane.object = f"<iframe src='{self.read_file(selected_row, 'html')}' width='100%' height='400'></iframe>"
 
     def __panel__(self):
         # Affichage du sélecteur et des onglets
