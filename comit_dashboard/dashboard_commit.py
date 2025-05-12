@@ -1,12 +1,9 @@
 from bokeh.settings import settings
 settings.resources = 'inline'
 
-
 import pandas as pd
 import panel as pn
 from datetime import datetime
-import sys
-import os
 import argparse
 import re
 try:
@@ -21,10 +18,11 @@ import plotly.graph_objects as go
 import param
 from panel.viewable import Viewer
 import unicodedata as ud
+import pyarrow.parquet as pq
+from io import BytesIO
+import httpx
 
 print(ud.unidata_version)
-
-#from uncertainty_button import Panel_graph_envelope
 
 # Initialiser Panel
 pn.extension("plotly", sizing_mode="stretch_width")  # Adapter la taille des widgets et graphiques à la largeur de l'écran
@@ -43,8 +41,8 @@ class ConfigPanel(pn.viewable.Viewer) :
     def __init__(self, **params):
         super().__init__(**params)
 
-        # self.config_filtered = config_df.index
-        config_options = self.df['Config_Alias'].unique().tolist() if not config_df.empty else []
+        # self.config_filtered = db['commands'].index
+        config_options = self.df['Config_Alias'].unique().tolist() if not db['commands'].empty else []
         self.config_selector = pn.widgets.MultiChoice(name="Sélectionnez les configurations", options=config_options)
 
         # Sélecteur des configs
@@ -176,7 +174,7 @@ class Panel_graph_envelope(pn.viewable.Viewer):
         for i, config in enumerate(index):
             # Filtrer les données pour chaque configuration
             config_data = df_filtred.loc[config]
-            alias = config_df.loc[config, 'Config_Alias'] #variable global pas propre mais commode
+            alias = db['commands'].loc[config, 'Config_Alias'] #variable global pas propre mais commode
             if self.lab_group :
                 for j, t in enumerate(config_data[self.lab_group].unique()):  
                     task_data = config_data[config_data[self.lab_group] == t]
@@ -334,7 +332,7 @@ class Tasks_Histogramme(pn.viewable.Viewer):
         # Ajouter chaque tâche comme une barre empilée
         for task in pivot_df.columns:
             fig.add_trace(go.Bar(
-                x=pivot_df.index.map(lambda x: f"{config_df.loc[x[0], 'Config_Alias']} - SNR: {x[1]}"),  # Combinaison Config_Hash + SNR comme étiquette
+                x=pivot_df.index.map(lambda x: f"{db['commands'].loc[x[0], 'Config_Alias']} - SNR: {x[1]}"),  # Combinaison Config_Hash + SNR comme étiquette
                 y=pivot_df[task],
                 name=task
             ))
@@ -459,12 +457,12 @@ class Research_config_filter(pn.viewable.Viewer):
             self._config_allowed[col] = self.df[col].unique().tolist()
         
         # Filtrer les colonnes qui suivent le format "FAMILLE.nom"
-        config_df = self.df
+        df_commands = self.df
         # Les colonnes suivantes ne doivent pas avoir de filtre
-        config_df = config_df.drop('Config_Alias', axis=1)
+        df_commands = df_commands.drop('Config_Alias', axis=1)
         
         family_columns = {}
-        for col in config_df.columns:
+        for col in df_commands.columns:
             match = re.match(r"(\w+)\.(\w+)", col)
             if match:
                 family, name = match.groups()
@@ -480,7 +478,7 @@ class Research_config_filter(pn.viewable.Viewer):
         for family, columns in family_columns.items():
             widgets = []
             for col in columns :
-                options = config_df[col].unique().tolist()
+                options = df_commands[col].unique().tolist()
                 is_disabled = len(options) == 1
                 widget = pn.widgets.MultiChoice(name=col, options=options, value=options, disabled=is_disabled, css_classes=["grayed-out"] if is_disabled else [])
                 
@@ -494,9 +492,9 @@ class Research_config_filter(pn.viewable.Viewer):
     def __panel__(self):
         return pn.Card(self.accordion_families, title="🔍\t Filtres de recherche")
     
-    def _filter_config(self, config_df, config_allowed):
+    def _filter_config(self, df_commands, config_allowed):
         # Filtre le DataFrame en fonction des valeurs définies dans config_allowed
-        config_filtered_df = config_df.copy()
+        config_filtered_df = df_commands.copy()
         for col, allowed_values in config_allowed.items():
             if allowed_values:  # S'il y a des valeurs autorisées pour cette colonne
                 config_filtered_df = config_filtered_df[config_filtered_df[col].isin(allowed_values)]
@@ -507,7 +505,7 @@ class Research_config_filter(pn.viewable.Viewer):
         if len(event.old) > 1 :
             self._config_allowed[event.obj.name] = event.new
             #event.obj.param.disabled = len(event.new) == 1 #A tester
-            config_filtered = self._filter_config(config_df, self._config_allowed)
+            config_filtered = self._filter_config(db['commands'], self._config_allowed)
             self.config_selector.param.config_options= config_filtered
         else :
             event.obj.param.value = event.old
@@ -592,13 +590,13 @@ class LogViewer(pn.viewable.Viewer):
         # Initialisation des onglets
         self.output_pane = pn.pane.Markdown("Sélectionnez une configuration pour voir les fichiers.")
         self.error_pane = pn.pane.Markdown("")
-        self.report_pane = pn.pane.HTML("")
+        #self.report_pane = pn.pane.HTML("")
         
         # Onglets pour afficher les fichiers
         self.tabs = pn.Tabs(
             ("📄 Output", pn.Column(self.output_pane, scroll=True, height=600)),
             ("⚠ Erreur", pn.Column(self.error_pane, scroll=True, height=600)),
-            ("📊 Rapport énergétique par Degenerium", pn.Column(self.report_pane, scroll=True, height=600))
+            #("📊 Rapport énergétique par Degenerium", pn.Column(self.report_pane, scroll=True, height=600))
         )
         
         self.radioBoutton = ConfigUniqueSelector(df = self.df, name="One Configuration Selection", config_selector= self.config_selector)
@@ -615,10 +613,10 @@ class LogViewer(pn.viewable.Viewer):
         self.output_pane.object = f"### Fichier output\n```\n{self.read_file(selected_row, 'out')}\n```"
         self.error_pane.object  = f"### Fichier erreur\n```\n{self.read_file(selected_row, 'err')}\n```"
         
-        if args.local :
-            self.report_pane.object = self.read_file(selected_row, 'html')
-        else :
-            self.report_pane.object = f"<iframe src='{self.read_file(selected_row, 'html')}' width='100%' height='400'></iframe>"
+        # if args.local :
+        #     self.report_pane.object = self.read_file(selected_row, 'html')
+        # else :
+        #     self.report_pane.object = f"<iframe src='{self.read_file(selected_row, 'html')}' width='100%' height='400'></iframe>"
 
     def __panel__(self):
         # Affichage du sélecteur et des onglets
@@ -660,82 +658,93 @@ class LogViewer(pn.viewable.Viewer):
 
 ##################################### Chargement ####################################
 
-# Charger les données si elles existent
-def load_data():
-    def csvread(name):
-        path = args.database_path + name + '.csv'
-        
-        if os.path.exists(path) :
-            # Chargement depuis le chemin local
-            ret = pd.read_csv(path)
-        else:
-            # Gestion de l'environnement Pyodide
-            if "pyodide" in sys.modules:
-                # Utiliser le lien "raw" de GitHub pour un accès direct
-                url = f"https://raw.githubusercontent.com/fCheminadeInria/aff3ct.github.io/master/comit_dashboard/database/{name}.csv"
-                try:
-                    with open_url(url) as file:
-                        ret = pd.read_csv(file)
-                except Exception as e:
-                    print(f"Echec au chargement de {name} depuis {url} : {e}")
-                    ret = pd.DataFrame()  # Retourne un DataFrame vide en cas d'échec
-            else:
-                print(f"Echec au chargement de {name} : {path} (fichier introuvable)")
-                ret = pd.DataFrame()  # Retourne un DataFrame vide si le fichier n'existe pas
-        
-        return ret
+GITLAB_PACKAGE_URL = "https://gitlab.inria.fr/api/v4/projects/1420/packages/generic/elk-export/latest/"
+
+TABLES = ["tasks", "performances", "git", "command", "meta", "runs"]
+
+
+async def load_parquet(name):
+    url = GITLAB_PACKAGE_URL + name + ".parquet"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            buf = BytesIO(response.content)
+
+            # Lecture par PyArrow pur
+            table = pq.read_table(source=buf)
+            return table.to_pandas()
+
+    except Exception as e:
+        print(f"❌ Erreur lors du chargement de {name}.parquet : {e}")
+        return pd.DataFrame()
     
-    config_df      = csvread('config')
-    config_df.set_index('Config_Hash', inplace=True)
     
-    task_df        = csvread('tasks')
-    task_df.set_index('Config_Hash', inplace=True)
+async def load_data():
     
-    performance_df = csvread('performances')
-    performance_df.set_index('Config_Hash', inplace=True)
-    
-    git_df         = csvread('log_git')
-    
-    git_df.set_index('echo sha', inplace=True)
-    git_df['date'] = pd.to_datetime(git_df['date'],utc=True) 
-    
-    # Créer un dictionnaire de correspondance Config_Hash → Config_Alias
-    config_df['Config_Alias'] = config_df['Meta.GitVersion'] + "_"  +  config_df['Meta.Command_short'] + "(" + config_df.index.str[:8] + ")"
-    config_aliases = dict(zip(config_df.index, config_df['Config_Alias']))
-    
-    return config_df, task_df, performance_df, git_df, config_aliases
+    df_commands =  await load_parquet('command')
+    df_commands.set_index('Command_id', inplace=True)
+
+    df_meta = await load_parquet('meta')
+    df_meta.set_index('meta_id', inplace=True)
+
+    df_param = await load_parquet('parameters')
+
+    df_tasks = await load_parquet('tasks')
+    df_tasks.set_index('RUN_id', inplace=True)
+
+    df_runs = await load_parquet('runs')
+    df_runs.set_index('RUN_id', inplace=True)
+
+    df_git = await load_parquet('git')
+    df_git.set_index('sha1', inplace=True)
+    # df_git['date'] = pd.to_datetime(df_git['date'], utc=True)
+
+    # Générer Config_Alias depuis config
+    df_commands['Config_Alias'] = df_commands.index + " : " + df_commands['Command_short'] + "_" + df_commands['sha1']
+    config_aliases = dict(zip(df_commands.index, df_commands['Config_Alias']))
+
+    pn.state.cache['db'] =  {
+        "commands": df_commands,
+        "tasks": df_tasks,
+        "runs": df_runs,
+        "git": df_git,
+        "meta": df_meta,
+        "param": df_param,
+        "config_aliases": config_aliases
+    }
 
 # Configurer argparse pour gérer les arguments en ligne de commande
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Tableau de bord des commits.")
     parser.add_argument('-l', '--local', action="store_true", help="Local affiche le tableau de bord dans le navigateur, son absence permet son export.")  # on/off flag
-    parser.add_argument('--database_path', default='./comit_dashboard/database/', help="Remplace le chemin par défaut (./comit_dashboard/database/) vers la base de données.")  # on/off flag
     return parser.parse_args()
 
  # Utiliser des valeurs par défaut dans le cas d'un export qui ne supporte pas argparse
 class DefaultArgs:
     local = False
-    database_path = "./comit_dashboard/database/"
 args = DefaultArgs()
 if __name__ == "__main__":
     args = parse_arguments()  # Appel unique de argparse ici
 
 # Charger les données initiales
-config_df, task_df, performance_df, git_df, config_aliases = load_data()
+pn.state.onload(load_data)
+
+db = pn.state.cache['db']
 
 ##################################### Panel Données ####################################
 
 # Widgets d'affichage des informations
-config_count = pn.indicators.Number(name="Nombre de configurations", value=config_df.index.nunique() if not config_df.empty else 0)
-git_version_count = pn.indicators.Number(name="Nombre de versions Git avec des données", value=config_df['Meta.GitVersion'].nunique() if not config_df.empty else 0)
-commit_count = pn.indicators.Number(name="Nombre de commits historisés dans Git", value=git_df .index.nunique() if not git_df.empty else 0)
+config_count = pn.indicators.Number(name="Nombre de configurations", value=db['commands'].shape[0] if not db['commands'].empty else 0)
+git_version_count = pn.indicators.Number(name="Nombre de commit avec des données", value=db['commands']['sha1'].nunique() if not db['git'].empty else 0)
+commit_count = pn.indicators.Number(name="Nombre de commits historisés dans Git", value=db['git'].shape[0] if not db['git'].empty else 0)
 
 # Créer un indicateur pour afficher la date du commit le plus récent
-latest_commit_date = git_df['date'].max() if not git_df.empty else "Aucune date disponible"
+latest_commit_date = db['git']['date'].max() if not db['git'].empty else "Aucune date disponible"
 latest_commit_date_str = latest_commit_date.strftime('%Y-%m-%d %H:%M:%S') if latest_commit_date != "Aucune date disponible" else latest_commit_date
 
 # Extraire la date du commit le plus récent
-latest_commit_date = git_df['date'].max() if not git_df.empty else "Aucune date disponible"
+latest_commit_date = db['git']['date'].max() if not db['git'].empty else "Aucune date disponible"
 
 # Créer un widget statique pour afficher la date du commit le plus récent
 latest_commit_date_display = pn.Column(
@@ -786,46 +795,27 @@ pn.config.raw_css.append("""
 
 ##################################### Panel Git ####################################
 
-def filter_data(git_df, project, date_range):
+def filter_data(df_git, date_range):
     start_date, end_date = date_range
     # Filtrage par date 
     start_date = datetime.combine(date_range[0], datetime.min.time())
     end_date   = datetime.combine(date_range[1], datetime.min.time())
     
-    # Convertir les dates de la colonne 'date' de git_df en tz-naive
-    git_df['date'] = git_df['date'].dt.tz_localize(None)
-
     # Filtrage des données en fonction de la plage de dates
-    filtered_df = git_df[(git_df['date'] >= start_date) & (git_df['date'] <= end_date)]   
-    
-    # Filtrage par projet, si ce n'est pas 'Tous'
-    if project != 'Tous':
-        filtered_df = filtered_df[filtered_df['Project'] == project]
+    filtered_df = df_git[(df_git['date'] >= start_date) & (df_git['date'] <= end_date)]   
     
     # Mise à jour de la table avec les données filtrées
     table_commit.value = filtered_df
 
 # Lier le filtre au slider et au RadioButton
 def update_filter(event):
-    project = project_radio_button.value
     date_range = date_range_slider.value
-    filter_data(git_df, project, date_range)
+    filter_data(db['git'], date_range)
 
-# Radiobouton
-# Extraire les projets uniques de git_df et ajouter "Tous"
-projects = git_df['Project'].unique().tolist()
-projects.append('Tous')  # Ajout de l'option 'Tous'
-
-# Créer le widget RadioButton
-project_radio_button = pn.widgets.RadioButtonGroup(
-    name='Sélectionner un projet',
-    options=projects,
-    value='Tous'  # Option par défaut
-)
 
 # Configuration de l'intervalle de dates pour le DateRangeSlider
-min_date = git_df['date'].min() if not git_df.empty else datetime(2000, 1, 1)
-max_date = git_df['date'].max() if not git_df.empty else datetime.now()
+min_date = db['git']['date'].min() if not db['git'].empty else datetime(2000, 1, 1)
+max_date = db['git']['date'].max() if not db['git'].empty else datetime.now()
 
 # Création du DateRangeSlider
 date_range_slider = pn.widgets.DateRangeSlider(
@@ -836,17 +826,16 @@ date_range_slider = pn.widgets.DateRangeSlider(
 )
 
 #table de données Git
-table_commit = pn.widgets.DataFrame(git_df, name='Table de Données', text_align = 'center')
+table_commit = pn.widgets.DataFrame(db['git'], name='Table de Données', text_align = 'center')
 
 # Lier les événements aux widgets
-project_radio_button.param.watch(update_filter, 'value')
 date_range_slider.param.watch(update_filter, 'value')
 
 # Initialisation de la table avec les données filtrées par défaut
-filter_data(git_df, project_radio_button.value, date_range_slider.value)
+filter_data(db['git'], date_range_slider.value)
 
 panelCommit = pn.Column(
-    pn.Column(project_radio_button, date_range_slider),
+    pn.Column(date_range_slider),
     table_commit,
 )
 
@@ -858,8 +847,8 @@ def plot_performance_metrics_plotly(configs, noiseScale):
     if not configs:
         return pn.pane.Markdown("Veuillez sélectionner au moins une configuration pour afficher les performances.")
     
-    filtered_performance_df = performance_df.loc[configs]
-    if filtered_performance_df.empty:
+    filtered_df_runs = db['runs'].loc[configs]
+    if filtered_df_runs.empty:
         return pn.pane.Markdown("Pas de données de performance disponibles pour les configurations sélectionnées.")
     
     fig = go.Figure()
@@ -868,7 +857,7 @@ def plot_performance_metrics_plotly(configs, noiseScale):
     colors = px.colors.qualitative.Plotly[:len(configs)]  # Choisir des couleurs depuis Plotly, ajustées à la taille de configs
     
     for i, config in enumerate(configs):
-        config_data = filtered_performance_df.loc[config]
+        config_data = filtered_df_runs.loc[config]
         snr = config_data[noiseScale]
         ber = config_data['Bit Error Rate (BER) and Frame Error Rate (FER).BER']
         fer = config_data['Bit Error Rate (BER) and Frame Error Rate (FER).FER']
@@ -917,12 +906,12 @@ def plot_performance_metrics_plotly(configs, noiseScale):
     return pn.pane.Plotly(fig, sizing_mode="stretch_width")
 
 
-#research_config_filter = Research_config_filter(config_selector = config_selector, df = config_df)
-config_selector = ConfigPanel(df = config_df)
+#research_config_filter = Research_config_filter(config_selector = config_selector, df = db['commands'])
+config_selector = ConfigPanel(df = db['commands'])
 
 mi_panel = pn.Column(
     Mutual_information_Panels(
-        df = performance_df,
+        df = db['runs'],
         index_selecter = config_selector,
         noiseScale =noiseScale
     ),
@@ -935,13 +924,13 @@ panelConfig = pn.Row(
     #pn.Column(select_all_button, clear_button, config_selector, research_config_filter, width=300),
     config_selector,
     pn.Column(
-        TableConfig(df=config_df, config_selector=config_selector, meta=False),
+        TableConfig(df=db['commands'], config_selector=config_selector, meta=False),
         pn.Tabs(
             ('ılıılıılıılıılıılı BER/FER', pn.bind(plot_performance_metrics_plotly, config_selector.param.value, noiseScale.param.value)),
             ('⫘⫘⫘ Mutual information', mi_panel)
         ),
         pn.pane.HTML("<div style='font-size: 20px;background-color: #e0e0e0; padding: 5px;line-height : 0px;'><h2> ✏️ Logs</h2></div>"),
-        LogViewer(df=config_df, config_selector=config_selector),
+        LogViewer(df=db['commands'], config_selector=config_selector),
         sizing_mode="stretch_width"
     )
     
@@ -953,13 +942,13 @@ panelConfig = pn.Row(
 # Histogramme des temps des jobs
 task_Time_Histogramme = Tasks_Histogramme(
     multi_choice_widget = config_selector,
-    df = task_df,
+    df = db['tasks'],
     noiseScale = noiseScale
 ) 
 
 plot_debit = Panel_graph_envelope(
     multi_choice_widget = config_selector,
-    df = task_df,
+    df = db['tasks'],
     lab ="Measured throughput Average", 
     labmin="Measured throughput Mininmum", 
     labmax="Measured throughputMaximum", 
@@ -970,7 +959,7 @@ plot_debit = Panel_graph_envelope(
 
 plot_latence = Panel_graph_envelope(
     multi_choice_widget = config_selector,
-    df = task_df,
+    df = db['tasks'],
     lab ="Measured latency Average", 
     labmin="Measured latency Mininmum", 
     labmax="Measured latency Maximum", 
@@ -980,7 +969,7 @@ plot_latence = Panel_graph_envelope(
 )    
     
 panel_level_noise = pn.Column(
-    TableConfig(df=config_df, config_selector=config_selector, meta=True),
+    TableConfig(df=db['commands'], config_selector=config_selector, meta=True),
     task_Time_Histogramme,
     plot_latence,
     plot_debit,
