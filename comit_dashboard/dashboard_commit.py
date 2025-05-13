@@ -54,8 +54,6 @@ class ConfigPanel(pn.viewable.Viewer) :
 #        pn.bind(self._update_value, self.config_selector)
         self.config_selector.param.watch(self._update_value, 'value')
 
-
-
     def __panel__(self):
         return pn.Column(
             self.select_all_button, 
@@ -63,7 +61,6 @@ class ConfigPanel(pn.viewable.Viewer) :
             self.config_selector, 
             Research_config_filter(config_selector = self.config_selector, df = self.df), 
             width=300)
-    
     
     def _update_value(self, event = None):
         # Met à jour `self.value` en fonction des configurations sélectionnées
@@ -147,7 +144,7 @@ class Panel_graph_envelope(pn.viewable.Viewer):
         if index is None :
             df_filtred = self.df
         else :
-            df_filtred = self.df.loc[index] 
+            df_filtred = self.df[self.df["Command_id"].isin(index)] 
         
         # Si pas de données de tâches pour les configurations sélectionnées
         if df_filtred.empty:
@@ -173,7 +170,8 @@ class Panel_graph_envelope(pn.viewable.Viewer):
         # Ajouter une trace pour chaque configuration et tâche
         for i, config in enumerate(index):
             # Filtrer les données pour chaque configuration
-            config_data = df_filtred.loc[config]
+            config_data = df_filtred[df_filtred['command_id'] == config]
+            
             alias = db['commands'].loc[config, 'Config_Alias'] #variable global pas propre mais commode
             if self.lab_group :
                 for j, t in enumerate(config_data[self.lab_group].unique()):  
@@ -393,7 +391,7 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
         if index is None :
             df_filtred = self.df
         else :
-            df_filtred = self.df.loc[index] 
+            df_filtred = self.df[self.df["Command_id"].isin(index)] 
         
         # Si pas de données de tâches pour les configurations sélectionnées
         if df_filtred.empty:
@@ -450,7 +448,6 @@ class Research_config_filter(pn.viewable.Viewer):
     def __init__(self, **params):
         super().__init__(**params)
         
-        
         # Configuration initiale Tout
         self._config_allowed = {}
         for col in self.df.columns:
@@ -459,7 +456,9 @@ class Research_config_filter(pn.viewable.Viewer):
         # Filtrer les colonnes qui suivent le format "FAMILLE.nom"
         df_commands = self.df
         # Les colonnes suivantes ne doivent pas avoir de filtre
-        df_commands = df_commands.drop('Config_Alias', axis=1)
+        columns_to_exclude = ['Config_Alias', 'param_id', 'meta_id', 'git_id', 'Command']
+
+        df_commands = df_commands.drop(columns=columns_to_exclude, errors='ignore')
         
         family_columns = {}
         for col in df_commands.columns:
@@ -505,7 +504,7 @@ class Research_config_filter(pn.viewable.Viewer):
         if len(event.old) > 1 :
             self._config_allowed[event.obj.name] = event.new
             #event.obj.param.disabled = len(event.new) == 1 #A tester
-            config_filtered = self._filter_config(db['commands'], self._config_allowed)
+            config_filtered = self._filter_config(self.df, self._config_allowed)
             self.config_selector.param.config_options= config_filtered
         else :
             event.obj.param.value = event.old
@@ -523,19 +522,17 @@ class TableConfig(pn.viewable.Viewer):
     
     @param.depends('config_selector.value', watch=True)
     def table_selected_config_filter(self):
-
         self.tab.object = self._prepare()
 
     def _prepare(self):
-        if self.meta :
-            filtered_df = self.df.filter(regex=r"^(Meta)\.")
-        else :
-            filtered_df = self.df.filter(regex=r"^(Simulation)\.")
+        c_filter = self.df.loc[self.config_selector.value]
         
-        filtered_df.columns = filtered_df.columns.str.replace(r"^(Meta\.|Simulation\.)", "", regex=True)
-        filtered_df = filtered_df.loc[self.config_selector.value]
+        if self.meta :
+            filtered_df = db['meta'][db['meta'].index.isin(c_filter['meta_id'])]
+        else :
+            filtered_df = db['param'][db['param'].index.isin(c_filter['param_id'])]
+        
         return filtered_df
-
 
 class ConfigUniqueSelector (pn.viewable.Viewer) :
     df = param.DataFrame(doc="Le dataframe contenant les données")
@@ -543,7 +540,6 @@ class ConfigUniqueSelector (pn.viewable.Viewer) :
     config_selector = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
     def __init__ (self, **params):
         super().__init__(**params)
-        
         df = self.df.loc[self.config_selector.value]
         
         self.radio_group = pn.widgets.RadioBoxGroup(
@@ -578,7 +574,7 @@ class ConfigUniqueSelector (pn.viewable.Viewer) :
             # Réactiver et mettre à jour les options
             self.radio_group.disabled = False
             self.radio_group.options = list(df.Config_Alias)
-            self.radio_group.value = df.Config_Alias[0] if len(df.Config_Alias) > 0 else '-'
+            self.radio_group.value = df.Config_Alias.iloc[0] if len(df.Config_Alias) > 0 else '-'
 
 class LogViewer(pn.viewable.Viewer):
     df = param.DataFrame(doc="Le dataframe contenant les données")
@@ -589,16 +585,7 @@ class LogViewer(pn.viewable.Viewer):
         
         # Initialisation des onglets
         self.output_pane = pn.pane.Markdown("Sélectionnez une configuration pour voir les fichiers.")
-        self.error_pane = pn.pane.Markdown("")
-        #self.report_pane = pn.pane.HTML("")
-        
-        # Onglets pour afficher les fichiers
-        self.tabs = pn.Tabs(
-            ("📄 Output", pn.Column(self.output_pane, scroll=True, height=600)),
-            ("⚠ Erreur", pn.Column(self.error_pane, scroll=True, height=600)),
-            #("📊 Rapport énergétique par Degenerium", pn.Column(self.report_pane, scroll=True, height=600))
-        )
-        
+
         self.radioBoutton = ConfigUniqueSelector(df = self.df, name="One Configuration Selection", config_selector= self.config_selector)
         # Mise à jour des onglets en fonction de la sélection
         self.radioBoutton.param.watch(self._update_tabs, "value")
@@ -610,58 +597,140 @@ class LogViewer(pn.viewable.Viewer):
         selected_row = self.df.loc[self.config_selector.value]
         
         # Mettre à jour le contenu des onglets
-        self.output_pane.object = f"### Fichier output\n```\n{self.read_file(selected_row, 'out')}\n```"
-        self.error_pane.object  = f"### Fichier erreur\n```\n{self.read_file(selected_row, 'err')}\n```"
-        
-        # if args.local :
-        #     self.report_pane.object = self.read_file(selected_row, 'html')
-        # else :
-        #     self.report_pane.object = f"<iframe src='{self.read_file(selected_row, 'html')}' width='100%' height='400'></iframe>"
+        if 'log' in self.df.columns:
+            self.output_pane.object = f"### Fichier output\n```\n{df['log'].iloc[0]}\n```"
+        else:
+            self.output_pane.object = "### Fichier output\n```\nAucun log disponible.\n```"
 
     def __panel__(self):
         # Affichage du sélecteur et des onglets
         grid = pn.GridSpec(sizing_mode="stretch_width", ncols=4)
         grid[0, 0] = self.radioBoutton
-        grid[0, 1:] = self.tabs
-        return grid
+        grid[0, 1:] = self.output_pane
+        return grid  
 
-    def read_file(self, selected_row, ext):
+
+
+#################################
+## Component pour le Panel Git ##
+#################################
+
+class PerformanceByCommit(pn.viewable.Viewer):
+    ''' Affiche les graphes de latences et de débits par commit et code dans dans des onglets. '''
+    def __init__(self, **params):
+        super().__init__(**params)
+
+        # Étape 1 : joindre runs avec commands
+        runs_cmd = db['runs'].merge(
+            db['commands'][['sha1', 'param_id']], left_on='Command_id', right_index=True
+        )
+
+        # Étape 2 : joindre avec git via git_id
+        full_df = runs_cmd.merge(
+            db['git'][['date']], left_on='sha1', right_index=True
+        )
         
-        if len(selected_row) == 0 :
-            return ""
-        try:
-            # Accéder à la valeur de 'file_path' dans la série
-            if ext != 'html':
-                path = 'file_path'
-            else :
-                path = 'html_degenerium_path'
-            
-            file_path = selected_row[path] if isinstance(selected_row[path], str) else selected_row[path].values[0]
-            
-            
-            if ext != 'html' or args.local :
-                if file_path:
-                    # Vérification si file_path existe et est valide
-                    with open(args.database_path + file_path + "." + ext, 'r') as file:
-                        return file.read()
-                else:
-                    return f"Le fichier n'a pas de chemin spécifié pour l'extension {ext}."
-            else :
-                return file_path
+        # Étape 3 : joindre avec param via param_id pour avoir les Simulation.Code type (C)
+        full_df = full_df.merge(
+            db['param'][['Simulation.Code type (C)']], left_on='param_id', right_index=True
+        )
+
+        full_df = full_df.sort_values('date')
+
+                # Nettoyage des colonnes
+        throughput_col = 'Global throughputand elapsed time.SIM_THR(Mb/s)'
+        latency_col = 'Global throughputand elapsed time.elapse_time(ns)'
+
+        # Moyenne par commit
+        df_grouped = full_df.groupby(['sha1', 'Simulation.Code type (C)']).agg({
+            throughput_col: 'mean',
+            latency_col: 'mean',
+            'date': 'first'
+        }).reset_index()
+
+        # Renommer pour clarté
+        df_grouped = df_grouped.rename(columns={
+            throughput_col: 'Débit moyen (Mb/s)',
+            latency_col: 'Latence moyenne (ns)',
+            'Simulation.Code type (C)': 'Code Simulation'
+        })
+
+        # Tracer une courbe par code avec légende à droite et barre en dessous
+        fig_throughput = px.line(
+            df_grouped,
+            x='date', y='Débit moyen (Mb/s)',
+            color='Code Simulation',
+            title="Débit moyen par commit (par code)",
+            markers=True
+        )
+
+        # Ajuster la légende et la barre de défilement
+        fig_throughput.update_layout(
+            legend=dict(
+                orientation='v',  # Légende verticale
+                yanchor='top',
+                y=1,  # Positionner la légende en haut
+                xanchor='left',
+                x=1.05  # Placer la légende à droite
+            ),
+            margin=dict(r=100),  # Créer un espace pour la légende à droite
+            xaxis=dict(
+                title="Date",
+                rangeslider=dict(visible=True),  # Ajouter une barre de défilement
+                showgrid=True
+            ),
+            yaxis=dict(
+                title="Débit moyen (Mb/s)",
+                showgrid=True
+            ),
+        )
+
+        fig_latency = px.line(
+            df_grouped,
+            x='date', y='Latence moyenne (ns)',
+            color='Code Simulation',
+            title="Latence moyenne par commit (par code)",
+            markers=True
+        )
+
+        # Ajuster la légende et la barre de défilement pour la latence
+        fig_latency.update_layout(
+            legend=dict(
+                orientation='v',
+                yanchor='top',
+                y=1,
+                xanchor='left',
+                x=1.05
+            ),
+            margin=dict(r=100),
+            xaxis=dict(
+                title="Date",
+                rangeslider=dict(visible=True),
+                showgrid=True
+            ),
+            yaxis=dict(
+                title="Latence moyenne (ns)",
+                showgrid=True
+            ),
+        )
 
 
-        except FileNotFoundError:
-            return f"Le fichier {ext} est introuvable."
-        except Exception as e:
-            return f"Erreur lors de la lecture du fichier {ext}: {str(e)}"
-   
+
+        self.tabs = pn.Tabs(
+            ('📈 Débit', pn.pane.Plotly(fig_throughput, config={'responsive': True})),
+            ('⏱️ Latence', pn.pane.Plotly(fig_latency, config={'responsive': True}))
+        )
+
+    def __panel__(self):
+        return self.tabs
+
+
+
+
 
 ##################################### Chargement ####################################
 
 GITLAB_PACKAGE_URL = "https://gitlab.inria.fr/api/v4/projects/1420/packages/generic/elk-export/latest/"
-
-TABLES = ["tasks", "performances", "git", "command", "meta", "runs"]
-
 
 async def load_parquet(name):
     url = GITLAB_PACKAGE_URL + name + ".parquet"
@@ -678,8 +747,7 @@ async def load_parquet(name):
     except Exception as e:
         print(f"❌ Erreur lors du chargement de {name}.parquet : {e}")
         return pd.DataFrame()
-    
-    
+       
 async def load_data():
     
     df_commands =  await load_parquet('command')
@@ -689,6 +757,7 @@ async def load_data():
     df_meta.set_index('meta_id', inplace=True)
 
     df_param = await load_parquet('parameters')
+    df_param.set_index('param_id', inplace=True)
 
     df_tasks = await load_parquet('tasks')
     df_tasks.set_index('RUN_id', inplace=True)
@@ -732,49 +801,9 @@ pn.state.onload(load_data)
 
 db = pn.state.cache['db']
 
-##################################### Panel Données ####################################
-
-# Widgets d'affichage des informations
-config_count = pn.indicators.Number(name="Nombre de configurations", value=db['commands'].shape[0] if not db['commands'].empty else 0)
-git_version_count = pn.indicators.Number(name="Nombre de commit avec des données", value=db['commands']['sha1'].nunique() if not db['git'].empty else 0)
-commit_count = pn.indicators.Number(name="Nombre de commits historisés dans Git", value=db['git'].shape[0] if not db['git'].empty else 0)
-
-# Créer un indicateur pour afficher la date du commit le plus récent
-latest_commit_date = db['git']['date'].max() if not db['git'].empty else "Aucune date disponible"
-latest_commit_date_str = latest_commit_date.strftime('%Y-%m-%d %H:%M:%S') if latest_commit_date != "Aucune date disponible" else latest_commit_date
-
-# Extraire la date du commit le plus récent
-latest_commit_date = db['git']['date'].max() if not db['git'].empty else "Aucune date disponible"
-
-# Créer un widget statique pour afficher la date du commit le plus récent
-latest_commit_date_display = pn.Column(
-        pn.widgets.StaticText(name="Date du dernier commit",css_classes=["tittle_indicator-text"]),
-        pn.widgets.StaticText(value=str(latest_commit_date),css_classes=["indicator-text"])
-)
-
-pn.config.raw_css = [
-    """
-    .tittle_indicator-text {
-        font-size: 20px;
-        font-weight: normal;
-        color: #333333;
-    }
-    .indicator-text {
-        font-size: 64px;
-        font-weight: normal;
-        color: #333333;
-    }
-    """
-]
-
-#panel de la partie data
-panelData = pn.Column(config_count, 
-                   git_version_count, 
-                   commit_count,
-                   latest_commit_date_display,
-        sizing_mode="stretch_width")
-
-##################################### Paramêtre du site ####################################
+#######################
+## Paramêtre du site ##
+#######################
 
 noise_label ={}
 noise_label['Eb/N0'] = 'Signal Noise Ratio(SNR).Eb/N0(dB)'
@@ -793,7 +822,9 @@ pn.config.raw_css.append("""
 }
 """)
 
-##################################### Panel Git ####################################
+###############
+## Panel Git ##
+###############
 
 def filter_data(df_git, date_range):
     start_date, end_date = date_range
@@ -834,12 +865,49 @@ date_range_slider.param.watch(update_filter, 'value')
 # Initialisation de la table avec les données filtrées par défaut
 filter_data(db['git'], date_range_slider.value)
 
-panelCommit = pn.Column(
-    pn.Column(date_range_slider),
-    table_commit,
+git_version_count = pn.indicators.Number(name="Commit avec des données", value=db['commands']['sha1'].nunique() if not db['git'].empty else 0)
+commit_count = pn.indicators.Number(name="Commits historisés dans Git", value=db['git'].shape[0] if not db['git'].empty else 0)
+
+# Créer un indicateur pour afficher la date du commit le plus récent
+latest_commit_date = db['git']['date'].max() if not db['git'].empty else "Aucune date disponible"
+latest_commit_date_str = latest_commit_date.strftime('%Y-%m-%d %H:%M:%S') if latest_commit_date != "Aucune date disponible" else latest_commit_date
+
+# Extraire la date du commit le plus récent
+latest_commit_date = db['git']['date'].max() if not db['git'].empty else "Aucune date disponible"
+
+# Créer un widget statique pour afficher la date du commit le plus récent
+latest_commit_date_display = pn.Column(
+        pn.widgets.StaticText(name="Date du dernier commit",css_classes=["tittle_indicator-text"]),
+        pn.widgets.StaticText(value=str(latest_commit_date),css_classes=["indicator-text"])
 )
 
+
+perf_panel = PerformanceByCommit()
+
+panelCommit = pn.Column(
+    pn.Row(
+        commit_count,
+        git_version_count,
+        latest_commit_date_display
+    ),
+    pn.Column(date_range_slider),
+    table_commit,
+    perf_panel
+)
+
+
+###############################
+## Latence et débit par code ##
+###############################
+
+
+
+
+
+
 ##################################### Config ####################################
+
+
 
 # Performance par niveau de bruit pour les configurations sélectionnées
 def plot_performance_metrics_plotly(configs, noiseScale):
@@ -847,9 +915,12 @@ def plot_performance_metrics_plotly(configs, noiseScale):
     if not configs:
         return pn.pane.Markdown("Veuillez sélectionner au moins une configuration pour afficher les performances.")
     
-    filtered_df_runs = db['runs'].loc[configs]
+    filtered_df_runs = db['runs'][db['runs']["Command_id"].isin(configs)]
     if filtered_df_runs.empty:
         return pn.pane.Markdown("Pas de données de performance disponibles pour les configurations sélectionnées.")
+    
+    filtered_df_runs = filtered_df_runs.sort_values(by=noiseScale, ascending=True)
+    
     
     fig = go.Figure()
     
@@ -857,7 +928,7 @@ def plot_performance_metrics_plotly(configs, noiseScale):
     colors = px.colors.qualitative.Plotly[:len(configs)]  # Choisir des couleurs depuis Plotly, ajustées à la taille de configs
     
     for i, config in enumerate(configs):
-        config_data = filtered_df_runs.loc[config]
+        config_data = filtered_df_runs.loc[filtered_df_runs["Command_id"] == config]
         snr = config_data[noiseScale]
         ber = config_data['Bit Error Rate (BER) and Frame Error Rate (FER).BER']
         fer = config_data['Bit Error Rate (BER) and Frame Error Rate (FER).FER']
@@ -905,9 +976,8 @@ def plot_performance_metrics_plotly(configs, noiseScale):
     
     return pn.pane.Plotly(fig, sizing_mode="stretch_width")
 
-
 #research_config_filter = Research_config_filter(config_selector = config_selector, df = db['commands'])
-config_selector = ConfigPanel(df = db['commands'])
+config_selector = ConfigPanel(df = db['commands'].join(db['param'], on='param_id', rsuffix='_param'))
 
 mi_panel = pn.Column(
     Mutual_information_Panels(
@@ -918,11 +988,10 @@ mi_panel = pn.Column(
     scroll=True, height=700
 )
 
-
 # panel des configs
 panelConfig = pn.Row(
     #pn.Column(select_all_button, clear_button, config_selector, research_config_filter, width=300),
-    config_selector,
+
     pn.Column(
         TableConfig(df=db['commands'], config_selector=config_selector, meta=False),
         pn.Tabs(
@@ -933,64 +1002,87 @@ panelConfig = pn.Row(
         LogViewer(df=db['commands'], config_selector=config_selector),
         sizing_mode="stretch_width"
     )
-    
-    
 )
 
 ##################################### Performance par niveau de SNR ####################################
 
-# Histogramme des temps des jobs
-task_Time_Histogramme = Tasks_Histogramme(
-    multi_choice_widget = config_selector,
-    df = db['tasks'],
-    noiseScale = noiseScale
-) 
+# # Histogramme des temps des jobs
+# task_Time_Histogramme = Tasks_Histogramme(
+#     multi_choice_widget = config_selector,
+#     df = db['tasks'],
+#     noiseScale = noiseScale
+# ) 
 
-plot_debit = Panel_graph_envelope(
-    multi_choice_widget = config_selector,
-    df = db['tasks'],
-    lab ="Measured throughput Average", 
-    labmin="Measured throughput Mininmum", 
-    labmax="Measured throughputMaximum", 
-    lab_group='Task',
-    Ytitle = "Débit",
-    noiseScale = noiseScale
-)
+# plot_debit = Panel_graph_envelope(
+#     multi_choice_widget = config_selector,
+#     df = db['tasks'],
+#     lab ="Measured throughput Average", 
+#     labmin="Measured throughput Mininmum", 
+#     labmax="Measured throughputMaximum", 
+#     lab_group='Task',
+#     Ytitle = "Débit",
+#     noiseScale = noiseScale
+# )
 
-plot_latence = Panel_graph_envelope(
-    multi_choice_widget = config_selector,
-    df = db['tasks'],
-    lab ="Measured latency Average", 
-    labmin="Measured latency Mininmum", 
-    labmax="Measured latency Maximum", 
-    lab_group='Task',
-    Ytitle = "Latence",
-    noiseScale = noiseScale
-)    
+# plot_latence = Panel_graph_envelope(
+#     multi_choice_widget = config_selector,
+#     df = db['tasks'],
+#     lab ="Measured latency Average", 
+#     labmin="Measured latency Mininmum", 
+#     labmax="Measured latency Maximum", 
+#     lab_group='Task',
+#     Ytitle = "Latence",
+#     noiseScale = noiseScale
+#)    
     
 panel_level_noise = pn.Column(
-    TableConfig(df=db['commands'], config_selector=config_selector, meta=True),
-    task_Time_Histogramme,
-    plot_latence,
-    plot_debit,
+    #TableConfig(df=db['commands'], config_selector=config_selector, meta=True),
+    # task_Time_Histogramme,
+    # plot_latence,
+    # plot_debit,
     sizing_mode="stretch_width"
 )
+
+##################################### Panel Données ####################################
+
+# Widgets d'affichage des informations
+config_count = pn.indicators.Number(name="Configurations en base", value=db['commands'].shape[0] if not db['commands'].empty else 0)
+
+
+pn.config.raw_css = [
+    """
+    .tittle_indicator-text {
+        font-size: 20px;
+        font-weight: normal;
+        color: #333333;
+    }
+    .indicator-text {
+        font-size: 64px;
+        font-weight: normal;
+        color: #333333;
+    }
+    """
+]
+
+#panel de la partie data
+panelData = pn.Column(config_count, 
+                    config_selector,
+                    sizing_mode="stretch_width")
 
 ##################################### Tableau de bord ####################################
 
 # Panneaux des performances
 panel_Performances = pn.Column(
-    
     sizing_mode="stretch_width"
 )
 
 # Layout du tableau de bord avec tout dans une colonne et des arrières-plans différents
 dashboard = pn.Column(
-    pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ✏️ Git</h2></div>"),
+    pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ✏️ Evolution par commit </h2></div>"),
     panelCommit,
-    pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ☎️ Performances métiers </h2></div>"),
+    pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ☎️ Performances par commandes </h2></div>"),
     panelConfig,
-    pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ⚙️ IT performances</h2></div>"),
+    pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ⚙️ Performances par tâches</h2></div>"),
     panel_level_noise,
     )
 
@@ -1010,7 +1102,7 @@ logo = pn.pane.Image("https://raw.githubusercontent.com/fCheminadeInria/aff3ct.g
 
 dashboard= pn.template.FastListTemplate(
     title="Commits Dashboard",
-    sidebar=[logo, panelData, pn.layout.Divider(), paramSite],
+    sidebar=[logo, paramSite,  pn.layout.Divider(), panelData],
     main=[dashboard],
     main_layout=None,
     accent=ACCENT,
