@@ -18,17 +18,56 @@ import plotly.graph_objects as go
 import param
 from panel.viewable import Viewer
 import unicodedata as ud
-import pyarrow.parquet as pq
+import itertools
 from io import BytesIO
+
+## lib non compatible avec pyodide (usage uniquement en local)
 import httpx
+import pyarrow.parquet as pq
+
 
 print(ud.unidata_version)
+
+
+##################################### Niveau Global ####################################
 
 # Initialiser Panel
 pn.extension("plotly", sizing_mode="stretch_width")  # Adapter la taille des widgets et graphiques à la largeur de l'écran
 
-# Générer une palette de couleurs
-colors = px.colors.qualitative.Plotly
+
+######################
+## Echelle de bruit ##
+######################
+
+class NoiseScale (pn.viewable.Viewer) :
+    value = param.String(default= 'Signal Noise Ratio(SNR).Eb/N0(dB)', allow_refs=True)
+    noise_label = param.Dict()
+    
+    def __init__ (self, **params):
+        super().__init__(**params)
+        
+        self.radio_group = pn.widgets.RadioBoxGroup(
+            name='Echelle de bruit', 
+            options=list(self.noise_label.keys()), 
+            value=list(self.noise_label.keys())[0], 
+            inline=True )
+        self._update_value(None)
+        self.radio_group.param.watch(self._update_value, "value")
+
+    def __panel__(self):
+        return pn.Column(
+            pn.pane.Markdown(f"**{self.radio_group.name} :** "),
+            pn.Row(self.radio_group, css_classes=["align-right"],sizing_mode="stretch_width"),
+            sizing_mode="stretch_width")
+
+    def _update_value(self, event):
+        """
+        Met à jour la propriété `value` en fonction de la sélection.
+        """
+        self.value = self.noise_label[self.radio_group.value]
+
+
+
 
 ##################################### Niveau 1 : Git et perf global ####################################
 
@@ -92,13 +131,9 @@ class CommandFilterModel(param.Parameterized):
             df_filtered = df_filtered[df_filtered['code'].isin(self.code)]
         return df_filtered
 
-
-
 #################################
 ## Component pour le Panel Git ##
 #################################
-
-
 class DateRangeFilter(pn.viewable.Viewer):
     git_filter = param.ClassSelector(class_=GitFilterModel)
 
@@ -288,7 +323,6 @@ class FilteredTable(pn.viewable.Viewer):
     def __panel__(self):
         return self.table
 
-
 #####################
 ## Indicateurs Git ##
 #####################
@@ -328,14 +362,15 @@ class GitIndicators(pn.viewable.Viewer):
         return pn.Row(self.commit_count, self.git_version_count, self.last_commit_text)
 
 
-
-
 ##################################### Niveau 2 : Commandes ####################################
+
+################################################
+## Gestion des données niveau 2 avec filtrage ##
+################################################
 
 class ConfigPanel(pn.viewable.Viewer):
     command_filter = param.ClassSelector(class_=CommandFilterModel)
     df = param.DataFrame()  # Contiendra les données filtrées en cache
-    colors = param.Dict(default={}, doc="Couleurs des courbes")
     value = param.List(default=[], doc="Liste des index sélectionnés")
 
     def __init__(self, **params):
@@ -380,43 +415,40 @@ class ConfigPanel(pn.viewable.Viewer):
         else:
             self.value = []
 
-        self.colors.clear()
-        for i, color in enumerate(px.colors.qualitative.Plotly[:len(self.value)]):
-            self.colors[self.value[i]] = color
-
     def select_all_configs(self, event=None):
         self.config_selector.value = self.config_selector.options
 
     def clear_configs(self, event=None):
         self.config_selector.value = []
             
-
-class NoiseScale (pn.viewable.Viewer) :
-    value = param.String(default= 'Signal Noise Ratio(SNR).Eb/N0(dB)', allow_refs=True)
-    noise_label = param.Dict()
-    
-    def __init__ (self, **params):
+# affichage de la sélection     
+class TableConfig(pn.viewable.Viewer):
+    df = param.DataFrame(doc="Le dataframe contenant les données")
+    config_selector = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
+    meta = param.Boolean(doc="affiche les Meta-données si Vrai, les paramètres de simmulation si faux")
+    def __init__(self, **params):
         super().__init__(**params)
-        
-        self.radio_group = pn.widgets.RadioBoxGroup(
-            name='Echelle de bruit', 
-            options=list(self.noise_label.keys()), 
-            value=list(self.noise_label.keys())[0], 
-            inline=True )
-        self._update_value(None)
-        self.radio_group.param.watch(self._update_value, "value")
+        self.tab =  pn.pane.DataFrame(self._prepare(), name='table.selected_config', index=False)
 
     def __panel__(self):
-        return pn.Column(
-            pn.pane.Markdown(f"**{self.radio_group.name} :** "),
-            pn.Row(self.radio_group, css_classes=["align-right"],sizing_mode="stretch_width"),
-            sizing_mode="stretch_width")
+        return pn.Accordion( ("📥 Selected Configuration", self.tab))
+    
+    @param.depends('config_selector.value', watch=True)
+    def table_selected_config_filter(self):
+        self.tab.object = self._prepare()
 
-    def _update_value(self, event):
-        """
-        Met à jour la propriété `value` en fonction de la sélection.
-        """
-        self.value = self.noise_label[self.radio_group.value]
+    def _prepare(self):
+        c_filter = self.df.loc[self.config_selector.value]
+        
+        if self.meta :
+            filtered_df = db['meta'][db['meta'].index.isin(c_filter['meta_id'])]
+        else :
+            filtered_df = db['param'][db['param'].index.isin(c_filter['param_id'])]
+        
+        return filtered_df
+
+
+
 
 class Panel_graph_envelope(pn.viewable.Viewer):
     # Paramètres configurables
@@ -428,7 +460,6 @@ class Panel_graph_envelope(pn.viewable.Viewer):
     Ytitle = param.String(default="Valeur", doc="Titre de l'axe Y")
     multi_choice_widget = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Panel de sélection des configurations")
     noiseScale = param.ClassSelector(default=None, class_=pn.viewable.Viewer,doc="Choix de l'échelle de bruit par passage du label de la colonne")
-    #colors = param.ClassSelector(default=None, class_=pn.viewable.Viewer,doc="Couleurs des courbes")
 
     def __init__(self, **params):
         super().__init__(**params)
@@ -469,18 +500,14 @@ class Panel_graph_envelope(pn.viewable.Viewer):
         if (self.labmin == None or self.labmax == None):
             show_envelope = False
         
-        # Générer une palette de couleurs automatiquement selon le nombre de configurations
-        if self.lab_group : 
-            colors = px.colors.qualitative.Plotly[:len(index) * len(df_filtred[self.lab_group].unique())]
-        else :
-            colors = px.colors.qualitative.Plotly[:len(index) * len(df_filtred.index.unique())]
+        color_cycle = itertools.cycle(px.colors.qualitative.Plotly)
 
         fig = go.Figure()
 
         # Ajouter une trace pour chaque configuration et tâche
         for i, config in enumerate(index):
             # Filtrer les données pour chaque configuration
-            config_data = df_filtred[df_filtred['command_id'] == config]
+            config_data = df_filtred[df_filtred['Command_id'] == config]
             
             alias = db['commands'].loc[config, 'Config_Alias'] #variable global pas propre mais commode
             if self.lab_group :
@@ -489,6 +516,8 @@ class Panel_graph_envelope(pn.viewable.Viewer):
                     snr = task_data[noiseKey]
                     y_values = task_data[self.lab]         
                     
+                    color = next(color_cycle)
+
                     
                     if show_envelope :
                         y_values_min = task_data[self.labmin]  
@@ -498,14 +527,14 @@ class Panel_graph_envelope(pn.viewable.Viewer):
                         fig.add_trace(go.Scatter(
                             x=snr, y=y_values_max,
                             fill=None, mode='lines+markers',
-                            line=dict(width=2, dash='dash', color=colors[i * len(config_data[self.lab_group].unique()) + j]),
+                            line=dict(width=2, dash='dash', color=color),
                             marker=dict(symbol='x', size=6),
                             showlegend=False
                         ))
                         fig.add_trace(go.Scatter(
                             x=snr, y=y_values_min,
                             fill='tonexty', mode='lines+markers',
-                            line=dict(width=2, dash='dash', color=colors[i * len(config_data[self.lab_group].unique()) + j]),
+                            line=dict(width=2, dash='dash', color=color),
                             marker=dict(symbol='x', size=6),
                             name=f"min/max - {alias} - {t}"  
                         ))
@@ -514,10 +543,13 @@ class Panel_graph_envelope(pn.viewable.Viewer):
                     fig.add_trace(go.Scatter(
                         x=snr, y=y_values,
                         mode='lines+markers',
-                        line=dict(width=2, color=colors[i * len(config_data[self.lab_group].unique()) + j]),
+                        line=dict(width=2, color=color),
                         name=f"{self.lab} - {alias} - {t}"  
                     ))
             else :
+                
+                color = next(color_cycle)
+
                 snr = config_data[noiseKey]
                 y_values = config_data[self.lab]         
                 
@@ -529,14 +561,14 @@ class Panel_graph_envelope(pn.viewable.Viewer):
                     fig.add_trace(go.Scatter(
                         x=snr, y=y_values_max,
                         fill=None, mode='lines+markers',
-                        line=dict(width=2, dash='dash', color=colors[i]),
+                        line=dict(width=2, dash='dash', color=color),
                         marker=dict(symbol='x', size=6),
                         showlegend=False
                     ))
                     fig.add_trace(go.Scatter(
                         x=snr, y=y_values_min,
                         fill='tonexty', mode='lines+markers',
-                        line=dict(width=2, dash='dash', color=colors[i]),
+                        line=dict(width=2, dash='dash', color=color),
                         marker=dict(symbol='x', size=6),
                         name=f"min/max - {config}"  
                     ))
@@ -545,7 +577,7 @@ class Panel_graph_envelope(pn.viewable.Viewer):
                 fig.add_trace(go.Scatter(
                     x=snr, y=y_values,
                     mode='lines+markers',
-                    line=dict(width=2, color=colors[i]),
+                    line=dict(width=2, color=color),
                     name=f"{self.lab} - {config}"  
                 ))
         
@@ -576,90 +608,6 @@ class Panel_graph_envelope(pn.viewable.Viewer):
         
         return  pn.pane.Plotly(fig, sizing_mode="stretch_width")
 
-class Tasks_Histogramme(pn.viewable.Viewer):
-    # Paramètres configurables
-    df = param.DataFrame(doc="Le dataframe contenant les données")
-    multi_choice_widget = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
-    noiseScale = param.ClassSelector(default=None, class_=pn.viewable.Viewer,doc="Choix de l'échelle de bruit par passage du label de la colonne")
-
-    def __init__(self, **params):
-        super().__init__(**params)
-        
-        self.button_time_perc = pn.widgets.Toggle(name='%', value=True)
-        self.button_time_perc.param.watch(self.changeIcon, 'value')
-        self.ListBouton = pn.Column(
-            pn.widgets.TooltipIcon(value="Affichage des temps des tâches en milli-seconde ou en %."), 
-            self.button_time_perc,
-            width=50)
-        self.graphPanel = pn.bind(self._plot_task_data, self.button_time_perc, self.multi_choice_widget.param.value, self.noiseScale.param.value)
-        
-    def changeIcon(self, event) :
-        if event.new : 
-            self.button_time_perc.name = '%'
-        else :
-            self.button_time_perc.name = '⏱'
-    
-    def __panel__(self):
-        return pn.Row(self.ListBouton, self.graphPanel)
-    
-    def _plot_task_data(self,percent, index, noiseKey):
-        
-        if index is None :
-            df_filtred = self.df
-        else :
-            df_filtred = self.df.loc[index] 
-        
-        if df_filtred.empty:
-            self.button_time_perc.disabled=True
-            return pn.pane.Markdown(f"Graphes de Tâches : Pas de données de tâches disponibles pour les configurations sélectionnées.")
-        else : 
-            self.button_time_perc.disabled=False
-            
-        if percent :
-            y_label = ('Time', 'Durée')
-        else :
-            y_label = ('Perc','Durée (%)')
-        
-        
-        
-        # Pivot des données pour que chaque combinaison Config_Hash + Signal Noise Ratio(SNR).Eb/N0(dB) ait des colonnes pour les temps des tâches
-        pivot_df = df_filtred.pivot_table(
-            values=y_label[0], 
-            index=['Config_Hash', noiseKey], 
-            columns='Task',
-            aggfunc='sum', 
-            fill_value=0
-        )
-
-        # Générer une palette de couleurs automatiquement selon le nombre de configurations
-        colors = px.colors.qualitative.Plotly[:len(index) * len(df_filtred['Task'].unique())]
-
-        # Initialiser la figure Plotly
-        fig = go.Figure()
-        
-        # Ajouter chaque tâche comme une barre empilée
-        for task in pivot_df.columns:
-            fig.add_trace(go.Bar(
-                x=pivot_df.index.map(lambda x: f"{db['commands'].loc[x[0], 'Config_Alias']} - SNR: {x[1]}"),  # Combinaison Config_Hash + SNR comme étiquette
-                y=pivot_df[task],
-                name=task
-            ))
-
-        # Configuration de la mise en page
-        fig.update_layout(
-            barmode='stack',
-            title=f"Temps des tâches par Configuration et Niveau de Bruit  : {noiseKey}",
-            xaxis_title="Configuration et Niveau de Bruit",
-            yaxis_title=y_label[1],
-            xaxis=dict(tickangle=25),  # Rotation des étiquettes de l'axe x
-            template="plotly_white",
-            height=900,
-            showlegend=True,
-            margin=dict(t=70, b=50, l=50, r=10)
-            
-        )
-        return pn.pane.Plotly(fig, sizing_mode="stretch_width")
-
 class Mutual_information_Panels (pn.viewable.Viewer) :
     # Paramètres configurables
     df = param.DataFrame(doc="Le dataframe contenant les données")
@@ -669,7 +617,7 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
     def __init__(self, **params):
         super().__init__(**params)
         
-        self.colors = px.colors.qualitative.Plotly[:len(self.index_selecter.value)]
+        self.colors = itertools.cycle(px.colors.qualitative.Plotly)
         
         cols = ["Mutual Information.MI", "Mutual Information.MI_min", "Mutual Information.MI_max", "Mutual Information.n_trials"]
         self.df = self.df [ self.df[cols].notnull().any(axis=1) ]
@@ -713,14 +661,14 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
         # Ajouter une trace pour chaque configuration et tâche
         for i, config in enumerate(index):
             # Filtrer les données pour chaque configuration
-            config_data = df_filtred.loc[config]
+            config_data = df_filtred['Command_id'][config]
             snr = config_data[noiseKey]
             n_trials = config_data["Mutual Information.n_trials"]         
                 
             fig.add_trace(go.Scatter(
                 x=snr, y=n_trials,
                 mode='markers',
-                line=dict(width=2, color=colors[i]),
+                line=dict(width=2, color=next(self.colors)),
                 name=f"Nombre d'essais - {config}"  
             ))
         
@@ -818,37 +766,14 @@ class Research_config_filter(pn.viewable.Viewer):
             self.config_selector.param.config_options= config_filtered
         else :
             event.obj.param.value = event.old
-        
-class TableConfig(pn.viewable.Viewer):
-    df = param.DataFrame(doc="Le dataframe contenant les données")
-    config_selector = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
-    meta = param.Boolean(doc="affiche les Meta-données si Vrai, les paramètres de simmulation si faux")
-    def __init__(self, **params):
-        super().__init__(**params)
-        self.tab =  pn.pane.DataFrame(self._prepare(), name='table.selected_config', index=False)
-
-    def __panel__(self):
-        return pn.Accordion( ("📥 Selected Configuration", self.tab))
-    
-    @param.depends('config_selector.value', watch=True)
-    def table_selected_config_filter(self):
-        self.tab.object = self._prepare()
-
-    def _prepare(self):
-        c_filter = self.df.loc[self.config_selector.value]
-        
-        if self.meta :
-            filtered_df = db['meta'][db['meta'].index.isin(c_filter['meta_id'])]
-        else :
-            filtered_df = db['param'][db['param'].index.isin(c_filter['param_id'])]
-        
-        return filtered_df
-
-
-
+   
 
 
 ##################################### Niveau 3 : Commande ####################################
+
+###################################################
+## Gestion des données niveau 3 sélection unique ##
+###################################################
 
 class ConfigUniqueSelector (pn.viewable.Viewer) :
     df = param.DataFrame(doc="Le dataframe contenant les données")
@@ -892,6 +817,10 @@ class ConfigUniqueSelector (pn.viewable.Viewer) :
             self.radio_group.options = list(df.Config_Alias)
             self.radio_group.value = df.Config_Alias.iloc[0] if len(df.Config_Alias) > 0 else '-'
 
+################################################
+## Gestion des données niveau 2 avec filtrage ##
+################################################
+
 class LogViewer(pn.viewable.Viewer):
     df = param.DataFrame(doc="Le dataframe contenant les données")
     config_selector = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
@@ -924,6 +853,95 @@ class LogViewer(pn.viewable.Viewer):
             self.radioBoutton,
             self.output_pane,
             sizing_mode="stretch_width")
+
+
+######################
+## Graphe de tâches ##
+######################
+
+class Tasks_Histogramme(pn.viewable.Viewer):
+    # Paramètres configurables
+    df = param.DataFrame(doc="Le dataframe contenant les données")
+    multi_choice_widget = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
+    noiseScale = param.ClassSelector(default=None, class_=pn.viewable.Viewer,doc="Choix de l'échelle de bruit par passage du label de la colonne")
+
+    def __init__(self, **params):
+        super().__init__(**params)
+        
+        self.button_time_perc = pn.widgets.Toggle(name='%', value=True)
+        self.button_time_perc.param.watch(self.changeIcon, 'value')
+        self.ListBouton = pn.Column(
+            pn.widgets.TooltipIcon(value="Affichage des temps des tâches en milli-seconde ou en %."), 
+            self.button_time_perc,
+            width=50)
+        self.graphPanel = pn.bind(self._plot_task_data, self.button_time_perc, self.multi_choice_widget.param.value, self.noiseScale.param.value)
+        
+    def changeIcon(self, event) :
+        if event.new : 
+            self.button_time_perc.name = '%'
+        else :
+            self.button_time_perc.name = '⏱'
+    
+    def __panel__(self):
+        return pn.Row(self.ListBouton, self.graphPanel)
+    
+    def _plot_task_data(self,percent, index, noiseKey):
+        
+        if index is None :
+            df_filtred = self.df
+        else :
+            df_filtred = self.df.loc[index] 
+        
+        if df_filtred.empty:
+            self.button_time_perc.disabled=True
+            return pn.pane.Markdown(f"Graphes de Tâches : Pas de données de tâches disponibles pour les configurations sélectionnées.")
+        else : 
+            self.button_time_perc.disabled=False
+            
+        if percent :
+            y_label = ('Time', 'Durée')
+        else :
+            y_label = ('Perc','Durée (%)')
+        
+        
+        
+        # Pivot des données pour que chaque combinaison Config_Hash + Signal Noise Ratio(SNR).Eb/N0(dB) ait des colonnes pour les temps des tâches
+        pivot_df = df_filtred.pivot_table(
+            values=y_label[0], 
+            index=['Config_Hash', noiseKey], 
+            columns='Task',
+            aggfunc='sum', 
+            fill_value=0
+        )
+
+        # Générer une palette de couleurs automatiquement selon le nombre de configurations
+        colors = px.colors.qualitative.Plotly[:len(index) * len(df_filtred['Task'].unique())]
+
+        # Initialiser la figure Plotly
+        fig = go.Figure()
+        
+        # Ajouter chaque tâche comme une barre empilée
+        for task in pivot_df.columns:
+            fig.add_trace(go.Bar(
+                x=pivot_df.index.map(lambda x: f"{db['commands'].loc[x[0], 'Config_Alias']} - SNR: {x[1]}"),  # Combinaison Config_Hash + SNR comme étiquette
+                y=pivot_df[task],
+                name=task
+            ))
+
+        # Configuration de la mise en page
+        fig.update_layout(
+            barmode='stack',
+            title=f"Temps des tâches par Configuration et Niveau de Bruit  : {noiseKey}",
+            xaxis_title="Configuration et Niveau de Bruit",
+            yaxis_title=y_label[1],
+            xaxis=dict(tickangle=25),  # Rotation des étiquettes de l'axe x
+            template="plotly_white",
+            height=900,
+            showlegend=True,
+            margin=dict(t=70, b=50, l=50, r=10)
+            
+        )
+        return pn.pane.Plotly(fig, sizing_mode="stretch_width")
 
 
 #####################################################################################
