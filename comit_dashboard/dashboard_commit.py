@@ -67,9 +67,7 @@ class NoiseScale (pn.viewable.Viewer) :
         self.value = self.noise_label[self.radio_group.value]
 
 
-
-
-##################################### Niveau 1 : Git et perf global ####################################
+##################################### Modèle de données ####################################
 
 ##################################
 ## Gestion des données niveau 1 ##
@@ -117,7 +115,7 @@ class CommandFilterModel(param.Parameterized):
         all_codes = sorted(self.df_commands['code'].dropna().unique().tolist())
         self.param['code'].objects = all_codes
         self.param['code'].default = all_codes 
-        self.codes = all_codes
+        self.code = all_codes
 
     @param.depends('code', 'git_filter.filtered', watch=True)
     def _trigger(self):
@@ -130,6 +128,90 @@ class CommandFilterModel(param.Parameterized):
         if 'All' not in self.code:
             df_filtered = df_filtered[df_filtered['code'].isin(self.code)]
         return df_filtered
+
+
+################################################
+## Gestion des données niveau 2 avec filtrage ##
+################################################
+
+class Lvl2_Filter_Model(param.Parameterized):
+    command_filter = param.ClassSelector(class_=CommandFilterModel)
+    value = param.List(default=[])
+    colors = param.Dict(default={})
+    df = param.DataFrame()
+    options = param.DataFrame(default=pd.DataFrame(columns=["Config_Alias"]), doc="DataFrame contenant les options de filtrage")
+
+    def __init__(self, **params):
+        super().__init__(**params)
+        self._update_df()
+        self._update_lvl1()
+        self.command_filter.param.watch(self._update_lvl1, 'filtered')
+        self.param.watch(self._update_df, 'value')
+        
+    
+    def _update_lvl1(self, *events):
+        # Nettoyage de self.value : uniquement les index valides
+        self.options = self.command_filter.get_filtered_df()[['Config_Alias']]
+        self.value = [v for v in self.value if v in self.command_filter.get_filtered_df().index.unique()] # active _update_df
+        
+            
+    def _update_df(self, *events):
+        self.df = self.command_filter.get_filtered_df().loc[self.value]     
+     
+    def reset(self):
+        self.value = []
+
+
+##################################################
+## Gestion des données niveau 3 : config unique ##
+##################################################
+    
+class ConfigUniqueModel(param.Parameterized):
+    lv2_model = param.ClassSelector(default=None, class_=Lvl2_Filter_Model)
+    value = param.Selector(default=None, objects=[])
+
+    @property
+    def df_ref(self):
+        """Accès sécurisé au DataFrame."""
+        return self.lv2_model.df if self.lv2_model is not None else pd.DataFrame()
+
+    @property
+    def options_alias(self):
+        """Liste des Config_Alias pour une config_selector donnée."""
+        return self.lv2_model.df['Config_Alias'].tolist()
+
+    def value_by_alias(self, alias):
+        """Retourne le command_id correspondant à un alias donné."""
+        id = self.find_id_by_alias(alias)
+        if id is not None:
+            self.value = id
+
+    @param.depends('lv2_model.df', watch=True)
+    def _update_value_from_selector(self):
+        """Met à jour automatiquement `value` lors d'un changement de sélection."""
+        opts = self.options_alias
+        self.value = opts[0] if opts else '-'
+
+    def alias(self):
+        """Retourne le Config_Alias pour le command_id sélectionné."""
+        if self.value is None or self.value not in self.df_ref.index:
+            return '-'
+        return self.df_ref.loc[self.value]['Config_Alias']
+
+    def find_id_by_alias(self, alias):
+        """Retourne le command_id correspondant à un alias donné, ou None si non trouvé."""
+        df = self.df_ref
+        if df.empty or 'Config_Alias' not in df.columns:
+            return None
+        # Recherche de l'alias dans la colonne Config_Alias
+        mask = df['Config_Alias'] == alias
+        if mask.any():
+            # Puisque command_id est l'index, on récupère le premier index correspondant
+            return df.index[mask][0]
+        return None
+
+##################################### Niveau 1 : Git et perf global ####################################
+
 
 #################################
 ## Component pour le Panel Git ##
@@ -364,91 +446,88 @@ class GitIndicators(pn.viewable.Viewer):
 
 ##################################### Niveau 2 : Commandes ####################################
 
-################################################
-## Gestion des données niveau 2 avec filtrage ##
-################################################
+
+
+
+#################################
+## Sélecteur de configuration ###
+#################################
+
+MAX_SELECTION = 10
 
 class ConfigPanel(pn.viewable.Viewer):
-    command_filter = param.ClassSelector(class_=CommandFilterModel)
-    df = param.DataFrame()  # Contiendra les données filtrées en cache
-    value = param.List(default=[], doc="Liste des index sélectionnés")
+    lv2_model = param.ClassSelector(class_=Lvl2_Filter_Model)
 
     def __init__(self, **params):
-        if 'df' in params:
-            raise ValueError("Le paramètre 'df' ne doit pas être initialisé dans le constructeur.")
-        
         super().__init__(**params)
 
         self.config_selector = pn.widgets.MultiChoice(name="Sélectionnez les configurations", options=[])
-
         self.select_all_button = pn.widgets.Button(name="Tout sélectionner", button_type="success")
         self.clear_button = pn.widgets.Button(name="Tout désélectionner", button_type="warning")
+        self.dialog = pn.pane.Alert(alert_type="danger", visible=False, sizing_mode="stretch_width")
 
         self.select_all_button.on_click(self.select_all_configs)
         self.clear_button.on_click(self.clear_configs)
 
-        self.config_selector.param.watch(self._update_value, 'value')
-        self.command_filter.param.watch(self._update_df, 'filtered')
-
-        df = db['commands'].join(db['param'], on='param_id')
+        self.config_selector.param.watch(self._check_selection_limit, 'value')
+        self.lv2_model.param.watch(self._update_options, 'options')
+        self._update_options()
         
-        self._update_df()
-
     def __panel__(self):
         return pn.Column(
             self.select_all_button,
             self.clear_button,
             self.config_selector,
-            Research_config_filter(config_selector=self.config_selector, df=self.df),
+            self.dialog
         )
 
-    def _update_df(self, *events):
-        self.df = self.command_filter.get_filtered_df()
-        options = self.df['Config_Alias'].dropna().unique().tolist()
+    def _update_options(self, *events):
+        options = self.lv2_model.options["Config_Alias"].tolist()
         self.config_selector.options = options
-        self.config_selector.value = []  # reset la sélection au besoin
+        self.config_selector.value = []
+        self.select_all_button.disabled = len(options) > MAX_SELECTION
 
-    def _update_value(self, event=None):
-        selected_configs = self.config_selector.value
-        if selected_configs:
-            self.value = self.df[self.df["Config_Alias"].isin(selected_configs)].index.tolist()
+    def _check_selection_limit(self, event):
+        selected = event.new
+        if len(selected) > MAX_SELECTION:
+            self.config_selector.value = event.old
+            self.dialog.open(f"❌ Maximum {MAX_SELECTION} configurations.")
         else:
-            self.value = []
+            self.lv2_model.value = self.lv2_model.options[self.lv2_model.options["Config_Alias"].isin(selected)].index.tolist()
 
     def select_all_configs(self, event=None):
-        self.config_selector.value = self.config_selector.options
+        if len(self.config_selector.options) > MAX_SELECTION:
+            self.dialog.open(f"⚠️ Plus de {MAX_SELECTION} configurations. Filtrez avant de tout sélectionner.")
+        else:
+            self.config_selector.value = self.config_selector.options
 
     def clear_configs(self, event=None):
         self.config_selector.value = []
-            
+
+       
 # affichage de la sélection     
 class TableConfig(pn.viewable.Viewer):
-    df = param.DataFrame(doc="Le dataframe contenant les données")
-    config_selector = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
+    lv2_filter = param.ClassSelector(class_=Lvl2_Filter_Model)
     meta = param.Boolean(doc="affiche les Meta-données si Vrai, les paramètres de simmulation si faux")
+    
     def __init__(self, **params):
         super().__init__(**params)
-        self.tab =  pn.pane.DataFrame(self._prepare(), name='table.selected_config', index=False)
+        self.tab =  pn.pane.DataFrame(self._prepare(), name='table.selected_config', index=True)
+        self.lv2_filter.param.watch(self._update_table, 'value')
 
     def __panel__(self):
         return pn.Accordion( ("📥 Selected Configuration", self.tab))
     
-    @param.depends('config_selector.value', watch=True)
-    def table_selected_config_filter(self):
+    def _update_table(self, event=None):
         self.tab.object = self._prepare()
 
     def _prepare(self):
-        c_filter = self.df.loc[self.config_selector.value]
-        
         if self.meta :
-            filtered_df = db['meta'][db['meta'].index.isin(c_filter['meta_id'])]
+            df_filtered = self.lv2_filter.df[['meta_id']] .merge(db['meta'] , left_on='meta_id',  right_index=True).drop(columns=['meta_id'])
         else :
-            filtered_df = db['param'][db['param'].index.isin(c_filter['param_id'])]
+            df_filtered = self.lv2_filter.df[['param_id']].merge(db['param'], left_on='param_id', right_index=True).drop(columns=['param_id'])
         
-        return filtered_df
-
-
-
+        return df_filtered
 
 class Panel_graph_envelope(pn.viewable.Viewer):
     # Paramètres configurables
@@ -458,8 +537,8 @@ class Panel_graph_envelope(pn.viewable.Viewer):
     labmin = param.String(default=None, doc="Nom de la colonne pour la valeur minimale")
     labmax = param.String(default=None, doc="Nom de la colonne pour la valeur maximale")
     Ytitle = param.String(default="Valeur", doc="Titre de l'axe Y")
-    multi_choice_widget = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Panel de sélection des configurations")
     noiseScale = param.ClassSelector(default=None, class_=pn.viewable.Viewer,doc="Choix de l'échelle de bruit par passage du label de la colonne")
+    lv2_model = param.ClassSelector(default=None, class_=Lvl2_Filter_Model, doc="Modèle de filtrage de niveau 2")
 
     def __init__(self, **params):
         super().__init__(**params)
@@ -474,14 +553,16 @@ class Panel_graph_envelope(pn.viewable.Viewer):
             pn.widgets.TooltipIcon(value="Activer/Désactiver Enveloppe"), 
             self.button_env,
             width=50)
-        self.graphPanel = pn.bind(self._plot_enveloppe_incertitude,self.button_env, self.multi_choice_widget.param.value, self.noiseScale.param.value)
+        self.graphPanel = pn.bind(self._plot_enveloppe_incertitude,self.button_env, self.noiseScale.param.value)
         
 
     def __panel__(self):
         return pn.Row(self.ListBouton, self.graphPanel)
         
-    def _plot_enveloppe_incertitude(self, show_envelope, index, noiseKey):    
-     
+    def _plot_enveloppe_incertitude(self, show_envelope, noiseKey):    
+        
+        index = self.lv2_model.value
+        
         if index is None :
             df_filtred = self.df
         else :
@@ -611,6 +692,7 @@ class Panel_graph_envelope(pn.viewable.Viewer):
 class Mutual_information_Panels (pn.viewable.Viewer) :
     # Paramètres configurables
     df = param.DataFrame(doc="Le dataframe contenant les données")
+    lv2_model = param.ClassSelector(default=None, class_=Lvl2_Filter_Model)
     index_selecter = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
     noiseScale = param.ClassSelector(default=None, class_=pn.viewable.Viewer,doc="Choix de l'échelle de bruit par passage du label de la colonne")
 
@@ -623,7 +705,7 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
         self.df = self.df [ self.df[cols].notnull().any(axis=1) ]
         
         self.plot_mutual_information = Panel_graph_envelope(
-            multi_choice_widget = self.index_selecter,
+            lv2_model = self.lv2_model,
             df = self.df,
             lab   ="Mutual Information.MI", 
             labmin="Mutual Information.MI_min", 
@@ -635,7 +717,7 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
         self.ListBouton = pn.Column(
             pn.widgets.TooltipIcon(value="Seuls les configuration avec des valeurs pour \"Mutual Information.MI\", \"Mutual Information.MI_min\", \"Mutual Information.MI_max\", \"Mutual Information.n_trials\" sont affichées. "), 
             width=50)
-        self.mutual_information_ntrial = pn.bind(self._plottrial, self.index_selecter.param.value, self.noiseScale.param.value)
+        self.mutual_information_ntrial = pn.bind(self._plottrial, self.lv2_model.param.value, self.noiseScale.param.value)
 
     def __panel__(self):
         return pn.Column(
@@ -646,7 +728,7 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
     
  
     def _plottrial(self, index, noiseKey): 
-        if index is None :
+        if index is None  :
             df_filtred = self.df
         else :
             df_filtred = self.df[self.df["Command_id"].isin(index)] 
@@ -775,75 +857,59 @@ class Research_config_filter(pn.viewable.Viewer):
 ## Gestion des données niveau 3 sélection unique ##
 ###################################################
 
-class ConfigUniqueSelector (pn.viewable.Viewer) :
-    df = param.DataFrame(doc="Le dataframe contenant les données")
-    value = param.String(default= '-', allow_refs=True)
-    config_selector = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
-    def __init__ (self, **params):
+class ConfigUniqueSelector(pn.viewable.Viewer):
+    model = param.ClassSelector(class_=ConfigUniqueModel)
+
+    def __init__(self, **params):
         super().__init__(**params)
-        df = self.df.loc[self.config_selector.value]
-        
-        self.radio_group = pn.widgets.RadioBoxGroup(
+
+        self.selector = pn.widgets.RadioBoxGroup(
             name='Configurations', 
-            options=list(df.Config_Alias) if hasattr(df, 'Config_Alias') else [],
-            value=list(df.Config_Alias)[0]  if len(df.Config_Alias) > 0 else '-', 
-            inline=False )
-        self._update_value()
-        self.radio_group.param.watch(self._update_value, "value")
+            options=self.model.options_alias,
+            value=self.model.options_alias[0] if self.model.options_alias else '-', 
+            inline=False
+        )
+
+        self.model.param.watch(self._update_radio_group, "value")
+
+    @pn.depends('model.value', watch=True)
+    def _update_model_value(self, event=None):
+        if event and event.new is not None:
+            self.model.value_by_alias(event.new)
+        else:
+            self.model.value = None
+
+    def _update_radio_group(self, *events):
+        config_list = self.model.options_alias
+
+        self.selector.options = config_list
+        self.selector.value = config_list[0] if config_list else '-'
+        self.selector.disabled = not bool(config_list)
 
     def __panel__(self):
         return pn.Column(
-            pn.pane.Markdown(f"**{self.radio_group.name} :** "),
-            self.radio_group)
+            pn.pane.Markdown("**Configurations :**"),
+            self.selector
+        )
 
-    def _update_value(self, event = None):
-        """
-        Met à jour la propriété `value` en fonction de la sélection.
-        """
-        df = self.df.loc[self.config_selector.value]
-        self.value = df['Config_Alias'].get(self.radio_group.value, '-')
-    
-    @param.depends('config_selector.value', watch=True)   
-    def _setLabel(self):
-        df = self.df.loc[self.config_selector.value]
-        if df.empty:
-            # Griser et verrouiller le widget
-            self.radio_group.disabled = True
-            self.radio_group.value = '-'
-            self.radio_group.options = []
-        else:
-            # Réactiver et mettre à jour les options
-            self.radio_group.disabled = False
-            self.radio_group.options = list(df.Config_Alias)
-            self.radio_group.value = df.Config_Alias.iloc[0] if len(df.Config_Alias) > 0 else '-'
-
-################################################
-## Gestion des données niveau 2 avec filtrage ##
-################################################
+####################################
+## Affichage des journeaux d'exec ##
+####################################
 
 class LogViewer(pn.viewable.Viewer):
-    df = param.DataFrame(doc="Le dataframe contenant les données")
-    config_selector = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
+    model = param.ClassSelector(default=None, class_=ConfigUniqueModel)
     
     def __init__(self, **params):
         super().__init__(**params)
         
-        # Initialisation des onglets
         self.output_pane = pn.pane.Markdown("Sélectionnez une configuration pour voir les fichiers.")
+        self.radioBoutton = ConfigUniqueSelector(name="One Configuration Selection", model= self.model)
+        self.model.param.watch(self._update_tabs, "value")
 
-        self.radioBoutton = ConfigUniqueSelector(df = self.df, name="One Configuration Selection", config_selector= self.config_selector)
-        # Mise à jour des onglets en fonction de la sélection
-        self.radioBoutton.param.watch(self._update_tabs, "value")
-        # Mettre à jour la sélection dans le panneau
-
-    @param.depends('config_selector.value', watch=True)
     def _update_tabs(self, event = None):
-        # Récupérer la ligne sélectionnée
-        selected_row = self.df.loc[self.config_selector.value]
-        
-        # Mettre à jour le contenu des onglets
-        if 'log' in self.df.columns:
-            self.output_pane.object = f"### Fichier output\n```\n{df['log'].iloc[0]}\n```"
+        if 'log' in self.model.df_ref.columns:
+            log_text = self.model.df_ref['log'].iloc[0]
+            self.output_pane.object = f"### Fichier output\n```\n{log_text}\n```"
         else:
             self.output_pane.object = "### Fichier output\n```\nAucun log disponible.\n```"
 
@@ -1027,10 +1093,11 @@ db = pn.state.cache['db']
 ## Paramêtre du site ##
 #######################
 
-noise_label ={}
-noise_label['Eb/N0'] = 'Signal Noise Ratio(SNR).Eb/N0(dB)'
-noise_label['Es/N0'] = 'Signal Noise Ratio(SNR).Es/N0(dB)'
-noise_label['Sigma'] = 'Signal Noise Ratio(SNR).Sigma'
+noise_label = {
+    'Eb/N0': 'Signal Noise Ratio(SNR).Eb/N0(dB)',
+    'Es/N0': 'Signal Noise Ratio(SNR).Es/N0(dB)',
+    'Sigma': 'Signal Noise Ratio(SNR).Sigma',
+}
 
 noiseScale = NoiseScale(noise_label= noise_label)
 
@@ -1160,14 +1227,15 @@ def plot_performance_metrics_plotly(configs, noiseScale):
     
     return pn.pane.Plotly(fig, sizing_mode="stretch_width")
 
-#research_config_filter = Research_config_filter(config_selector = config_selector, df = db['commands'])
-config_selector = ConfigPanel(command_filter= command_filter)
+lvl2_filter = Lvl2_Filter_Model(command_filter=command_filter)
+config_panel = ConfigPanel(lv2_model=lvl2_filter)
+
 #df = db['commands'].join(db['param'], on='param_id', rsuffix='_param')
 
 mi_panel = pn.Column(
     Mutual_information_Panels(
         df = db['runs'],
-        index_selecter = config_selector,
+        lv2_model = lvl2_filter,
         noiseScale =noiseScale
     ),
     scroll=True, height=700
@@ -1175,13 +1243,11 @@ mi_panel = pn.Column(
 
 # panel des configs
 panelConfig = pn.Row(
-    #pn.Column(select_all_button, clear_button, config_selector, research_config_filter, width=300),
-
     pn.Column(
-        config_selector,
-        TableConfig(df=db['commands'], config_selector=config_selector, meta=False),
+        config_panel,
+        TableConfig(lv2_filter=lvl2_filter, meta=False),
         pn.Tabs(
-            ('ılıılıılıılıılıılı BER/FER', pn.bind(plot_performance_metrics_plotly, config_selector.param.value, noiseScale.param.value)),
+            ('ılıılıılıılıılıılı BER/FER', pn.bind(plot_performance_metrics_plotly, lvl2_filter.param.value, noiseScale.param.value)),
             ('⫘⫘⫘ Mutual information', mi_panel)
         ),
         sizing_mode="stretch_width"
@@ -1189,6 +1255,9 @@ panelConfig = pn.Row(
 )
 
 ##################################### Performance par niveau de SNR ####################################
+
+unique_model = ConfigUniqueModel(lv2_model=lvl2_filter)
+
 
 # # Histogramme des temps des jobs
 # task_Time_Histogramme = Tasks_Histogramme(
@@ -1218,11 +1287,13 @@ panelConfig = pn.Row(
 #     Ytitle = "Latence",
 #     noiseScale = noiseScale
 #)    
-    
+
+
+
 panel_par_config = pn.Column(
     pn.pane.HTML("<div style='font-size: 20px;background-color: #e0e0e0; padding: 5px;line-height : 0px;'><h2> ✏️ Logs</h2></div>"),
-    LogViewer(df=db['commands'], config_selector=config_selector),
-    #TableConfig(df=db['commands'], config_selector=config_selector, meta=True),
+    LogViewer(model=unique_model),
+    #TableConfig(lv2_filter=lvl2_filter, meta=True),
     # task_Time_Histogramme,
     # plot_latence,
     # plot_debit,
