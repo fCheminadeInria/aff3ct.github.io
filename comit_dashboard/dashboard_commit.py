@@ -107,7 +107,8 @@ class CommandFilterModel(param.Parameterized):
     df_commands = param.DataFrame()
     git_filter = param.ClassSelector(class_=GitFilterModel) 
     code = param.ListSelector(default=[], objects=[])
-    filtered = param.Parameter()
+    filtered = param.Parameter() # variable pour déclencher le filtrage
+    config_filter = param.Dict(default={})
 
     def __init__(self, **params):
         super().__init__(**params)
@@ -117,7 +118,7 @@ class CommandFilterModel(param.Parameterized):
         self.param['code'].default = all_codes 
         self.code = all_codes
 
-    @param.depends('code', 'git_filter.filtered', watch=True)
+    @param.depends('config_filter', 'code', 'git_filter.filtered', watch=True)
     def _trigger(self):
         self.param.trigger('filtered')  
 
@@ -127,7 +128,134 @@ class CommandFilterModel(param.Parameterized):
         df_filtered = self.df_commands[self.df_commands['sha1'].isin(sha1_valids)]
         if 'All' not in self.code:
             df_filtered = df_filtered[df_filtered['code'].isin(self.code)]
+        self.df_commands_intermediare = df_filtered
+        for col, values in self.config_filter.items():
+            if values:
+                df_filtered = df_filtered[df_filtered[col].isin(values)]
         return df_filtered
+
+
+class Research_config_filter(pn.viewable.Viewer):
+    command_filter = param.ClassSelector(class_=CommandFilterModel)
+
+    def __init__(self, **params):
+        super().__init__(**params)
+
+        df = self.command_filter.get_filtered_df()
+        df_filtered = df.drop(columns=['Config_Alias', 'param_id', 'meta_id', 'git_id', 'Command', 'Simulation.Code type (C)'], errors='ignore')
+
+        # Identification des familles de paramètres
+        family_columns = {}
+        for col in df_filtered.columns:
+            match = re.match(r"(\w+)\.(\w+)", col)
+            if match:
+                family_columns.setdefault(match.group(1), []).append(col)
+            else:
+                family_columns.setdefault("Autres", []).append(col)
+
+        # Création des widgets de filtrage
+        family_widgets = {}
+        for family, columns in family_columns.items():
+            widgets = []
+            for col in columns:
+                options = sorted(df[col].dropna().unique().tolist())
+                is_disabled = len(options) <= 1
+                widget = pn.widgets.MultiChoice(
+                    name=col,
+                    options=options,
+                    value=options,
+                    disabled=is_disabled,
+                    css_classes=["grayed-out"] if is_disabled else []
+                )
+                widget.param.watch(self._update_filterconfig, 'value')
+                widgets.append(widget)
+            family_widgets[family] = pn.Column(*widgets, name=family)
+
+        self.accordion_families = pn.Accordion(*[(f"{family}", widget) for family, widget in family_widgets.items()])
+        
+        self.filtre_actif= pn.pane.Markdown("", height=100)
+        self._config_filter_to_markdown()
+        
+        self.command_filter.param.watch(self._update_filter, 'filtered')
+
+    def _config_filter_to_markdown(self) -> str:
+        parts = []
+
+        for col_container in self.accordion_families.objects:
+            for widget in col_container.objects:
+                all_options = widget.options
+                selected = widget.value
+                deselected = sorted(set(all_options) - set(selected))
+                if deselected:
+                    parts.append(f"**{widget.name}** : {', '.join(map(str, deselected))}")
+
+        self.filtre_actif.object =  "\n\n".join(parts) if parts else "_Aucun filtre désactivé_"
+        
+    def __panel__(self):
+        
+        return pn.Card(
+            pn.Column(
+                pn.Card(
+                    pn.Column(
+                        self.filtre_actif, 
+                        styles={'overflow-y': 'auto'}
+                        ),
+                    title="🔍 Filtres actifs"
+                    ),
+                self.accordion_families, 
+                height=400,
+                styles={'overflow-y': 'auto'}),
+                title="🔍 Filtres de recherche",
+                collapsed=True
+                )
+            
+    def _get_current_filter(self):
+        """Construit un dictionnaire {colonne: valeurs sélectionnées} pour le filtre."""
+        return {
+            widget.name: widget.value
+            for col in self.accordion_families.objects
+            for widget in col.objects
+            if widget.value  # Ne garde que les filtres actifs
+        }
+
+    def _update_filter(self, event):
+        df = self.command_filter.get_filtered_df()
+        if df is None or df.empty:
+            return
+
+        # Appliquer le filtre actuel sur df_commands pour avoir le df filtré
+        df_filtered = df.drop(columns=['Config_Alias', 'param_id', 'meta_id', 'git_id', 'Command', 'Simulation.Code type (C)'], errors='ignore')
+
+        # Appliquer le filtre config_filter (ex: garder uniquement les valeurs sélectionnées pour chaque colonne)
+        for col, selected_values in self.command_filter.config_filter.items():
+            if selected_values:
+                df_filtered = df_filtered[df_filtered[col].isin(selected_values)]
+
+        # Met à jour les options et éventuellement les valeurs des widgets
+        for col_container in self.accordion_families.objects:
+            for widget in col_container.objects:
+                if widget.name in df_filtered.columns:
+                    options = sorted(self.command_filter.df_commands_intermediare[widget.name].dropna().unique().tolist())
+                    widget.options = options
+
+                    # Si la sélection actuelle n'est plus dans les options, on remet toute la sélection possible
+                    if not set(widget.value).issubset(set(options)):
+                        widget.value = options if options else []
+
+    def _update_filterconfig(self, event):
+        """Met à jour le filtre du modèle lors d’un changement utilisateur."""
+        
+            # Empêche la suppression complète des options
+        if len(event.new) < 1:
+            event.obj.value = event.old
+            return
+
+        self.command_filter.config_filter = {**self.command_filter.config_filter,    event.obj.name: event.new}
+        self._config_filter_to_markdown()
+
+
+
+
 
 
 ################################################
@@ -144,15 +272,16 @@ class Lvl2_Filter_Model(param.Parameterized):
     def __init__(self, **params):
         super().__init__(**params)
         self._update_df()
-        self._update_lvl1()
-        self.command_filter.param.watch(self._update_lvl1, 'filtered')
+        self._update_from_lvl1()
+        self.command_filter.param.watch(self._update_from_lvl1, 'filtered')
         self.param.watch(self._update_df, 'value')
         
     
-    def _update_lvl1(self, *events):
-        # Nettoyage de self.value : uniquement les index valides
-        self.options = self.command_filter.get_filtered_df()[['Config_Alias']]
-        self.value = [v for v in self.value if v in self.command_filter.get_filtered_df().index.unique()] # active _update_df
+    def _update_from_lvl1(self, *events):
+        df_filtered = self.command_filter.get_filtered_df()
+        self.value = [v for v in self.value if v in df_filtered.index]
+        self.options = df_filtered[['Config_Alias']]
+
         
             
     def _update_df(self, *events):
@@ -484,7 +613,6 @@ class ConfigPanel(pn.viewable.Viewer):
     def _update_options(self, *events):
         options = self.lv2_model.options["Config_Alias"].tolist()
         self.config_selector.options = options
-        self.config_selector.value = []
         self.select_all_button.disabled = len(options) > MAX_SELECTION
 
     def _check_selection_limit(self, event):
@@ -781,74 +909,6 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
         
         return  pn.pane.Plotly(fig, sizing_mode="stretch_width")
 
-class Research_config_filter(pn.viewable.Viewer):
-    # Paramètres configurables
-    df = param.DataFrame(doc="Le dataframe contenant les données")
-    config_selector = param.ClassSelector(default=None, class_=pn.widgets.MultiChoice, doc="Widget MultiChoice", allow_refs=False)
-    def __init__(self, **params):
-        super().__init__(**params)
-        
-        # Configuration initiale Tout
-        self._config_allowed = {}
-        for col in self.df.columns:
-            self._config_allowed[col] = self.df[col].unique().tolist()
-        
-        # Filtrer les colonnes qui suivent le format "FAMILLE.nom"
-        df_commands = self.df
-        # Les colonnes suivantes ne doivent pas avoir de filtre
-        columns_to_exclude = ['Config_Alias', 'param_id', 'meta_id', 'git_id', 'Command']
-
-        df_commands = df_commands.drop(columns=columns_to_exclude, errors='ignore')
-        
-        family_columns = {}
-        for col in df_commands.columns:
-            match = re.match(r"(\w+)\.(\w+)", col)
-            if match:
-                family, name = match.groups()
-                if family not in family_columns:
-                    family_columns[family] = []
-                family_columns[family].append(col)
-            else:
-                # Ajoute les colonnes sans famille dans une clé générale
-                family_columns.setdefault("Autres", []).append(col)
-        
-        # Créer les widgets de sélection pour chaque famille
-        family_widgets = {}
-        for family, columns in family_columns.items():
-            widgets = []
-            for col in columns :
-                options = df_commands[col].unique().tolist()
-                is_disabled = len(options) == 1
-                widget = pn.widgets.MultiChoice(name=col, options=options, value=options, disabled=is_disabled, css_classes=["grayed-out"] if is_disabled else [])
-                
-                widget.param.watch(self._update_filterconfig, 'value')
-                widgets.append(widget)
-                
-            family_widgets[family] = pn.Column(*widgets, name=family)
-
-        self.accordion_families = pn.Accordion(*[(f"{family}", widget) for family, widget in family_widgets.items()])
-        
-    def __panel__(self):
-        return pn.Card(self.accordion_families, title="🔍\t Filtres de recherche")
-    
-    def _filter_config(self, df_commands, config_allowed):
-        # Filtre le DataFrame en fonction des valeurs définies dans config_allowed
-        config_filtered_df = df_commands.copy()
-        for col, allowed_values in config_allowed.items():
-            if allowed_values:  # S'il y a des valeurs autorisées pour cette colonne
-                config_filtered_df = config_filtered_df[config_filtered_df[col].isin(allowed_values)]
-        return config_filtered_df.index
-
-    # Callback pour mettre à jour config_allowed et déclencher le filtrage
-    def _update_filterconfig(self, event):
-        if len(event.old) > 1 :
-            self._config_allowed[event.obj.name] = event.new
-            #event.obj.param.disabled = len(event.new) == 1 #A tester
-            config_filtered = self._filter_config(self.df, self._config_allowed)
-            self.config_selector.param.config_options= config_filtered
-        else :
-            event.obj.param.value = event.old
-   
 
 
 ##################################### Niveau 3 : Commande ####################################
@@ -1010,9 +1070,9 @@ class Tasks_Histogramme(pn.viewable.Viewer):
         return pn.pane.Plotly(fig, sizing_mode="stretch_width")
 
 
-#####################################################################################
-##################################### Assemblage ####################################
-#####################################################################################
+###############################################################################################################################################################################################################################################################
+#####################################                                                                      Input                                                                                                      ####################################
+###############################################################################################################################################################################################################################################################
 
 ###########################################
 ## Chargement des données depuis Gitlab ###
@@ -1089,6 +1149,11 @@ pn.state.onload(load_data)
 
 db = pn.state.cache['db']
 
+
+###############################################################################################################################################################################################################################################################
+#####################################                                                                      Assemblage                                                                                                      ####################################
+###############################################################################################################################################################################################################################################################
+
 #######################
 ## Paramêtre du site ##
 #######################
@@ -1118,13 +1183,15 @@ pn.config.raw_css.append("""
 git_filter = GitFilterModel(df_git=db['git'])
 
 #ajout du code aux commandes
-merged_df = db['commands'].merge(db['param'][['Simulation.Code type (C)']], 
+merged_df = db['commands'].merge(db['param'], #[['Simulation.Code type (C)']], 
                                 left_on='param_id',
                                 right_index=True,
                                 how='left')
 merged_df.rename(columns={'Simulation.Code type (C)': 'code'}, inplace=True)
 
 command_filter = CommandFilterModel(df_commands=merged_df, git_filter=git_filter)
+
+
 
 class PanelCommit(pn.viewable.Viewer):
     
@@ -1140,7 +1207,7 @@ class PanelCommit(pn.viewable.Viewer):
         self.table = FilteredTable(filter_model=self.git_filter)
         self.indicators = GitIndicators(df_git=db['git'], df_commands=db['commands'], filter_model=self.git_filter)
         self.perfgraph = PerformanceByCommit(git_filter=self.git_filter, command_filter=self.command_filter)
-
+        self.research_config_filter = Research_config_filter(command_filter=self.command_filter)
 
     def __panel__(self):
         return pn.Column(
@@ -1148,6 +1215,7 @@ class PanelCommit(pn.viewable.Viewer):
             self.date_slider,
             self.table,
             self.code_selector,
+            self.research_config_filter,
             self.perfgraph,
             sizing_mode="stretch_width"
         )
@@ -1156,6 +1224,8 @@ class PanelCommit(pn.viewable.Viewer):
         self.command_table.value = self.command_filter.get_filtered_df()
 
 panelCommit = PanelCommit(command_filter=command_filter, git_filter=git_filter)
+
+
 
 
 ##################################### Config ####################################
@@ -1334,6 +1404,7 @@ panel_Performances = pn.Column(
 
 # Layout du tableau de bord avec tout dans une colonne et des arrières-plans différents
 dashboard = pn.Column(
+    
     pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ✏️ Niveau 1 : Evolution par commit </h2></div>"),
     panelCommit,
     pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ☎️ Niveau 2 : BER / FER </h2></div>"),
