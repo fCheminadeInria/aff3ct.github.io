@@ -989,7 +989,7 @@ class LogViewer(pn.viewable.Viewer):
         filtered = log_df[log_df['Commit_id'] == commit_id]
 
         if not filtered.empty:
-            dates = filtered['DateExec'].astype(str).tolist()
+            dates = filtered['Date_Execution'].astype(str).tolist()
             self.date_selector.options = dates
             self.date_selector.value = dates[0]
             self.date_selector.visible = True
@@ -1005,7 +1005,7 @@ class LogViewer(pn.viewable.Viewer):
         log_df = self.model.db['log']
 
         if commit_id and selected_date:
-            filtered = log_df[(log_df['Commit_id'] == commit_id) & (log_df['DateExec'].astype(str) == selected_date)]
+            filtered = log_df[(log_df['Commit_id'] == commit_id) & (log_df['Date_Execution'].astype(str) == selected_date)]
             if not filtered.empty:
                 log_text = filtered['Log'].iloc[0]
                 self.output_pane.object = f"### Log du {selected_date}\n```\n{log_text}\n```"
