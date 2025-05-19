@@ -964,7 +964,11 @@ class LogViewer(pn.viewable.Viewer):
         
         self.output_pane = pn.pane.Markdown("Sélectionnez une configuration pour voir les fichiers.")
         self.radioBoutton = ConfigUniqueSelector(name="One Configuration Selection", model= self.model)
-        self.model.param.watch(self._update_tabs, "value")
+        
+        self.date_selector = pn.widgets.Select(name="Date d'exécution", options=[], visible=False)
+
+        self.model.param.watch(self._update_dates, "value")
+        self.date_selector.param.watch(self._update_log, "value")
 
     def _update_tabs(self, event = None):
         if 'log' in self.model.df_ref.columns:
@@ -973,11 +977,56 @@ class LogViewer(pn.viewable.Viewer):
         else:
             self.output_pane.object = "### Fichier output\n```\nAucun log disponible.\n```"
 
+    def _update_dates(self, event=None):
+        # Réagit au changement de configuration (commit_id)
+        if self.model.value is None or self.model.df_ref is None:
+            self.date_selector.visible = False
+            self.output_pane.object = "### Fichier output\n```\nAucune configuration sélectionnée.\n```"
+            return
+
+        commit_id = self.model.value  # commit sélectionné
+        log_df = self.model.db['log']
+        filtered = log_df[log_df['Commit_id'] == commit_id]
+
+        if not filtered.empty:
+            dates = filtered['DateExec'].astype(str).tolist()
+            self.date_selector.options = dates
+            self.date_selector.value = dates[0]
+            self.date_selector.visible = True
+        else:
+            self.date_selector.options = []
+            self.date_selector.visible = False
+            self.output_pane.object = "### Fichier output\n```\nAucun log disponible pour ce commit.\n```"
+
+    def _update_log(self, event=None):
+        # Réagit au changement de date
+        commit_id = self.model.value
+        selected_date = self.date_selector.value
+        log_df = self.model.db['log']
+
+        if commit_id and selected_date:
+            filtered = log_df[(log_df['Commit_id'] == commit_id) & (log_df['DateExec'].astype(str) == selected_date)]
+            if not filtered.empty:
+                log_text = filtered['Log'].iloc[0]
+                self.output_pane.object = f"### Log du {selected_date}\n```\n{log_text}\n```"
+            else:
+                self.output_pane.object = f"### Log du {selected_date}\n```\nAucun log trouvé.\n```"
+
+
+
+
+
+
+
     def __panel__(self):
         # Affichage du sélecteur et des onglets
         return pn.Column(
             self.radioBoutton,
-            self.output_pane,
+            pn.Row(
+                self.date_selector,
+                self.output_pane,
+                sizing_mode="stretch_width"
+            ),
             sizing_mode="stretch_width")
 
 
@@ -1080,42 +1129,72 @@ class Tasks_Histogramme(pn.viewable.Viewer):
 
 GITLAB_PACKAGE_URL = "https://gitlab.inria.fr/api/v4/projects/1420/packages/generic/elk-export/latest/"
 
-async def load_parquet(name):
-    url = GITLAB_PACKAGE_URL + name + ".parquet"
+async def load_table(name: str, fmt: str = "parquet") -> pd.DataFrame:
+    """
+    Charge un fichier distant au format Parquet ou JSON.
+
+    Args:
+        name (str): Nom du fichier sans extension
+        fmt (str): Format du fichier ('parquet' ou 'json')
+
+    Returns:
+        pd.DataFrame: Le DataFrame chargé, ou vide en cas d'erreur
+    """
+    url = f"{GITLAB_PACKAGE_URL}{name}.{fmt}"
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(url)
             response.raise_for_status()
             buf = BytesIO(response.content)
 
-            # Lecture par PyArrow pur
-            table = pq.read_table(source=buf)
-            return table.to_pandas()
+            if fmt == "parquet":
+                table = pq.read_table(source=buf)
+                return table.to_pandas()
+            elif fmt == "json":
+                # Essaie NDJSON d'abord
+                try:
+                    return pd.read_json(buf, orient="records", lines=True)
+                except ValueError:
+                    # Revenir à un JSON "classique" (liste d'objets)
+                    buf.seek(0)
+                    return pd.read_json(buf, orient="records")
+            else:
+                print(f"❌ Format non supporté : {fmt}")
+                return pd.DataFrame()
 
     except Exception as e:
-        print(f"❌ Erreur lors du chargement de {name}.parquet : {e}")
+        print(f"❌ Erreur lors du chargement de {name}.{fmt} : {e}")
         return pd.DataFrame()
-       
+
+      
 async def load_data():
     
-    df_commands =  await load_parquet('command')
+    fmt = 'parquet'
+    #fmt='json'
+    
+    df_commands = await load_table('command', fmt=fmt)
     df_commands.set_index('Command_id', inplace=True)
+    
 
-    df_meta = await load_parquet('meta')
+    df_meta = await load_table('meta', fmt=fmt)
     df_meta.set_index('meta_id', inplace=True)
 
-    df_param = await load_parquet('parameters')
+
+    df_param = await load_table('parameters', fmt=fmt)
     df_param.set_index('param_id', inplace=True)
 
-    df_tasks = await load_parquet('tasks')
+    df_tasks = await load_table('tasks', fmt=fmt)
     df_tasks.set_index('RUN_id', inplace=True)
 
-    df_runs = await load_parquet('runs')
+    df_runs = await load_table('runs', fmt=fmt)
     df_runs.set_index('RUN_id', inplace=True)
 
-    df_git = await load_parquet('git')
+    df_git = await load_table('git', fmt=fmt)
     df_git.set_index('sha1', inplace=True)
     # df_git['date'] = pd.to_datetime(df_git['date'], utc=True)
+
+    df_log = await load_table('log', fmt=fmt)
+    df_log.set_index('sha1', inplace=True)
 
     # Générer Config_Alias depuis config
     df_commands['Config_Alias'] = df_commands.index + " : " + df_commands['Command_short'] + "_" + df_commands['sha1']
@@ -1128,8 +1207,31 @@ async def load_data():
         "git": df_git,
         "meta": df_meta,
         "param": df_param,
-        "config_aliases": config_aliases
+        "config_aliases": config_aliases,
+        "log": df_log
     }
+
+
+def generate_typing_code(df, df_name="df"):
+    lines = []
+    for col in df.columns:
+        dtype = df[col].dtype
+
+        if pd.api.types.is_integer_dtype(dtype):
+            lines.append(f"{df_name}['{col}'] = pd.to_numeric({df_name}['{col}'], errors='coerce').astype('Int64')")
+        elif pd.api.types.is_float_dtype(dtype):
+            lines.append(f"{df_name}['{col}'] = pd.to_numeric({df_name}['{col}'], errors='coerce')")
+        elif pd.api.types.is_bool_dtype(dtype):
+            lines.append(f"{df_name}['{col}'] = {df_name}['{col}'].astype(bool)")
+        elif pd.api.types.is_datetime64_any_dtype(dtype):
+            lines.append(f"{df_name}['{col}'] = pd.to_datetime({df_name}['{col}'], errors='coerce')")
+        else:
+            lines.append(f"{df_name}['{col}'] = {df_name}['{col}'].astype(str)")
+    
+    return "\n".join(lines)
+
+
+
 
 # Configurer argparse pour gérer les arguments en ligne de commande
 def parse_arguments():
