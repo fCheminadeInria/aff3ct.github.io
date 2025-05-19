@@ -1012,12 +1012,6 @@ class LogViewer(pn.viewable.Viewer):
             else:
                 self.output_pane.object = f"### Log du {selected_date}\n```\nAucun log trouvé.\n```"
 
-
-
-
-
-
-
     def __panel__(self):
         # Affichage du sélecteur et des onglets
         return pn.Column(
@@ -1028,7 +1022,6 @@ class LogViewer(pn.viewable.Viewer):
                 sizing_mode="stretch_width"
             ),
             sizing_mode="stretch_width")
-
 
 ######################
 ## Graphe de tâches ##
@@ -1211,9 +1204,17 @@ async def load_data():
         "log": df_log
     }
 
+    # Afficher les types de données des DataFrames pour générer le typage des fichiers json depuis les parquets (utile pour le développement)
+    if fmt == 'parquet':
+        for name, df in pn.state.cache['db'].items():
+            print(generate_typing_code(df, name))
+            #print(f"DataFrame {name} :\n{df.dtypes}\n")
+    
 
 def generate_typing_code(df, df_name="df"):
-    lines = []
+    ''' Afficher les types de données des DataFrames pour générer le typage des fichiers json depuis les parquets (utile pour le développement) '''
+    lines = [f"# Typage pour {df_name}"]
+    
     for col in df.columns:
         dtype = df[col].dtype
 
