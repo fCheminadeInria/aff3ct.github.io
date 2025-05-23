@@ -319,7 +319,6 @@ class Research_config_filter(pn.viewable.Viewer):
 class Lvl2_Filter_Model(param.Parameterized):
     command_filter = param.ClassSelector(class_=CommandFilterModel)
     value = param.List(default=[])
-    colors = param.Dict(default={})
     df = param.DataFrame()
     options = param.DataFrame(default=pd.DataFrame(columns=["Config_Alias"]), doc="DataFrame contenant les options de filtrage")
 
@@ -357,8 +356,8 @@ class ConfigUniqueModel(param.Parameterized):
     lv2_model = param.ClassSelector(default=None, class_=Lvl2_Filter_Model)
     value = param.Selector(default=None, objects=[])
     date = param.Selector(default=None, objects=[])
+    options = param.Selector(default=None, objects=[])
 
-    change = param.Event()
 
     @property
     def _df_configs_from_lvl2(self):
@@ -419,7 +418,7 @@ class ConfigUniqueModel(param.Parameterized):
             return []
         # Conversion en str pour l'affichage (utile pour un widget Select)
         return df_logs['Date_Execution'].astype(str).unique().tolist()
-
+ 
     @property
     def options_alias(self):
         return self._df_configs_from_lvl2['Config_Alias'].tolist()
@@ -441,15 +440,14 @@ class ConfigUniqueModel(param.Parameterized):
         if id is not None:
             self.value = id
 
-
+    
     @param.depends('lv2_model.df', watch=True)
     def _on_lvl2_df_change(self):
-        opts = self._df_configs_from_lvl2
+        opts = self._df_configs_from_lvl2.index.tolist()
         # Initialise la valeur avec le command_id correspondant au premier alias
-        if not opts.empty:
-            self.value = opts.index[0]
-        else:
-            self.value = None
+        if self.value not in opts :
+            self.value = opts[0] if opts else None
+        self.options = opts
 
 
 ##################################### Niveau 1 : Git et perf global ####################################
@@ -692,9 +690,6 @@ class GitIndicators(pn.viewable.Viewer):
 
 
 ##################################### Niveau 2 : Commandes ####################################
-
-
-
 
 #################################
 ## Sélecteur de configuration ###
@@ -1052,7 +1047,6 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
 class ConfigUniqueSelector(pn.viewable.Viewer):
     model = param.ClassSelector(class_=ConfigUniqueModel)
 
-
     def __init__(self, **params):
         super().__init__(**params)
 
@@ -1064,9 +1058,6 @@ class ConfigUniqueSelector(pn.viewable.Viewer):
             inline=False
         )
 
-        # Lorsque self.model.value change, on met à jour la sélection
-        self.model.param.watch(self._sync_selector_from_model, 'value')
-
         # Lorsque l'utilisateur change la sélection, on met à jour self.model.value
         self.selector.param.watch(self._sync_model_from_selector, 'value')
 
@@ -1077,13 +1068,11 @@ class ConfigUniqueSelector(pn.viewable.Viewer):
         else:
             self.model.value = None
 
-    @pn.depends('model.value', watch=True)
+    @param.depends('model.options', watch=True)
     def _sync_selector_from_model(self, event=None):
-        """Binde model.value → sélection du RadioBoxGroup."""
+        alias = self.model.alias()
         opts = self.model.options_alias
         self.selector.options  = opts
-        
-        alias = self.model.alias()
         # Si l'alias du model n'est pas dans les options, on désactive
         if not alias == '-':
             self.selector.value = alias
@@ -1113,11 +1102,9 @@ class LogViewer(pn.viewable.Viewer):
         self.radioBoutton = ConfigUniqueSelector(name="One Configuration Selection", model= self.unique_conf_model)
         
         self.date_selector = pn.widgets.Select(name="Date d'exécution", options=[], visible=False)
+        self.date_selector.param.watch(self._update_log_on_date_change, "value")
 
-        self.unique_conf_model.param.watch(self._update_dates, "value")
-        self.date_selector.param.watch(self._update_log, "value")
-
-    @pn.depends('unique_conf_model.value', watch=True)
+    @param.depends('unique_conf_model.value', watch=True)
     def _update_dates(self, event=None):
         self.date_selector.options = self.unique_conf_model.options_dates
         self.date_selector.value = self.unique_conf_model.date
@@ -1128,10 +1115,9 @@ class LogViewer(pn.viewable.Viewer):
         else:
             self.date_selector.visible = False
 
-
-    def _update_log(self, event=None):
+    def _update_log_on_date_change(self, event=None):
+        self.unique_conf_model.date = self.date_selector.value
         self.output_pane.object = self.unique_conf_model.log
-
 
     def __panel__(self):
         # Affichage du sélecteur et des onglets
@@ -1284,7 +1270,6 @@ async def load_data():
         fmt='json'
     else:    
         fmt = 'parquet'
-        #fmt='json'
     
     df_commands = await load_table('command', fmt=fmt)
     df_commands.set_index('Command_id', inplace=True)
@@ -1419,10 +1404,6 @@ def apply_typing_code():
 
     # Typage pour param
     param = pn.state.cache['db']['param']
-    param['CRC.Implementation'] = param['CRC.Implementation'].astype(str)
-    param['CRC.Polynomial (hexadecimal)'] = param['CRC.Polynomial (hexadecimal)'].astype(str)
-    param['CRC.Size (in bit)'] = param['CRC.Size (in bit)'].astype(str)
-    param['CRC.Type'] = param['CRC.Type'].astype(str)
     param['Channel.Add users'] = param['Channel.Add users'].astype(str)
     param['Channel.Complex'] = param['Channel.Complex'].astype(str)
     param['Channel.Implementation'] = param['Channel.Implementation'].astype(str)
@@ -1432,14 +1413,13 @@ def apply_typing_code():
     param['Codec.Frame size (N)'] = param['Codec.Frame size (N)'].astype(str)
     param['Codec.Info. bits (K)'] = param['Codec.Info. bits (K)'].astype(str)
     param['Codec.Type'] = param['Codec.Type'].astype(str)
+    param['Decoder.Correction power (T)'] = param['Decoder.Correction power (T)'].astype(str)
+    param['Decoder.Galois field order (m)'] = param['Decoder.Galois field order (m)'].astype(str)
     param['Decoder.Implementation'] = param['Decoder.Implementation'].astype(str)
-    param['Decoder.Node type'] = param['Decoder.Node type'].astype(str)
     param['Decoder.Systematic'] = param['Decoder.Systematic'].astype(str)
     param['Decoder.Type (D)'] = param['Decoder.Type (D)'].astype(str)
     param['Encoder.Systematic'] = param['Encoder.Systematic'].astype(str)
     param['Encoder.Type'] = param['Encoder.Type'].astype(str)
-    param['Frozen bits generator MK.Noise'] = param['Frozen bits generator MK.Noise'].astype(str)
-    param['Frozen bits generator MK.Type'] = param['Frozen bits generator MK.Type'].astype(str)
     param['Modem.Bits per symbol'] = param['Modem.Bits per symbol'].astype(str)
     param['Modem.Implementation'] = param['Modem.Implementation'].astype(str)
     param['Modem.Sigma square'] = param['Modem.Sigma square'].astype(str)
@@ -1447,7 +1427,6 @@ def apply_typing_code():
     param['Monitor.Compute mutual info'] = param['Monitor.Compute mutual info'].astype(str)
     param['Monitor.Frame error count (e)'] = param['Monitor.Frame error count (e)'].astype(str)
     param['Monitor.Lazy reduction'] = param['Monitor.Lazy reduction'].astype(str)
-    param['Polar code.Kernel'] = param['Polar code.Kernel'].astype(str)
     param['Simulation.Bad frames replay'] = param['Simulation.Bad frames replay'].astype(str)
     param['Simulation.Bad frames tracking'] = param['Simulation.Bad frames tracking'].astype(str)
     param['Simulation.Bit rate'] = param['Simulation.Bit rate'].astype(str)
@@ -1473,11 +1452,6 @@ def apply_typing_code():
     param['Terminal.Enabled'] = param['Terminal.Enabled'].astype(str)
     param['Terminal.Frequency (ms)'] = param['Terminal.Frequency (ms)'].astype(str)
     param['Terminal.Show Sigma'] = param['Terminal.Show Sigma'].astype(str)
-    param['Polar code.Kernels'] = param['Polar code.Kernels'].astype(str)
-    param['Polar code.Stages'] = param['Polar code.Stages'].astype(str)
-    param['Decoder.Num. of lists (L)'] = param['Decoder.Num. of lists (L)'].astype(str)
-    param['Decoder.Correction power (T)'] = param['Decoder.Correction power (T)'].astype(str)
-    param['Decoder.Galois field order (m)'] = param['Decoder.Galois field order (m)'].astype(str)
     param['Quantizer.Fixed-point config.'] = param['Quantizer.Fixed-point config.'].astype(str)
     param['Quantizer.Implementation'] = param['Quantizer.Implementation'].astype(str)
     param['Quantizer.Type'] = param['Quantizer.Type'].astype(str)
@@ -1492,36 +1466,29 @@ def apply_typing_code():
     param['Encoder.H matrix path'] = param['Encoder.H matrix path'].astype(str)
     param['Encoder.H matrix reordering'] = param['Encoder.H matrix reordering'].astype(str)
     param['Decoder.Bernouilli probas'] = param['Decoder.Bernouilli probas'].astype(str)
-    param['Decoder.Min type'] = param['Decoder.Min type'].astype(str)
-    param['Puncturer.Pattern'] = param['Puncturer.Pattern'].astype(str)
-    param['Puncturer.Type'] = param['Puncturer.Type'].astype(str)
-    param['Decoder.Normalize factor'] = param['Decoder.Normalize factor'].astype(str)
+    param['CRC.Implementation'] = param['CRC.Implementation'].astype(str)
+    param['CRC.Polynomial (hexadecimal)'] = param['CRC.Polynomial (hexadecimal)'].astype(str)
+    param['CRC.Size (in bit)'] = param['CRC.Size (in bit)'].astype(str)
+    param['CRC.Type'] = param['CRC.Type'].astype(str)
     param['Decoder.Adaptative mode'] = param['Decoder.Adaptative mode'].astype(str)
     param['Decoder.Max num. of lists (L)'] = param['Decoder.Max num. of lists (L)'].astype(str)
     param['Decoder.Polar node types'] = param['Decoder.Polar node types'].astype(str)
     param['Decoder.SIMD strategy'] = param['Decoder.SIMD strategy'].astype(str)
     param['Frozen bits generator.Noise'] = param['Frozen bits generator.Noise'].astype(str)
     param['Frozen bits generator.Type'] = param['Frozen bits generator.Type'].astype(str)
-    param['Source.Auto reset'] = param['Source.Auto reset'].astype(str)
-    param['Source.Fifo mode'] = param['Source.Fifo mode'].astype(str)
-    param['Source.Path'] = param['Source.Path'].astype(str)
-    param['Frozen bits generator.Path'] = param['Frozen bits generator.Path'].astype(str)
+    param['Puncturer.Type'] = param['Puncturer.Type'].astype(str)
+    param['Decoder.Node type'] = param['Decoder.Node type'].astype(str)
+    param['Frozen bits generator MK.Noise'] = param['Frozen bits generator MK.Noise'].astype(str)
+    param['Frozen bits generator MK.Type'] = param['Frozen bits generator MK.Type'].astype(str)
+    param['Polar code.Kernel'] = param['Polar code.Kernel'].astype(str)
+    param['Decoder.Min type'] = param['Decoder.Min type'].astype(str)
     param['Interleaver.Seed'] = param['Interleaver.Seed'].astype(str)
     param['Interleaver.Type'] = param['Interleaver.Type'].astype(str)
     param['Interleaver.Uniform'] = param['Interleaver.Uniform'].astype(str)
-    param['Interleaver.Path'] = param['Interleaver.Path'].astype(str)
-    param['Modem.CPM L memory'] = param['Modem.CPM L memory'].astype(str)
-    param['Modem.CPM h index'] = param['Modem.CPM h index'].astype(str)
-    param['Modem.CPM mapping'] = param['Modem.CPM mapping'].astype(str)
-    param['Modem.CPM sampling factor'] = param['Modem.CPM sampling factor'].astype(str)
-    param['Modem.CPM standard'] = param['Modem.CPM standard'].astype(str)
-    param['Modem.CPM wave shape'] = param['Modem.CPM wave shape'].astype(str)
-    param['Modem.Max type'] = param['Modem.Max type'].astype(str)
-    param['Simulation.Global iterations (I)'] = param['Simulation.Global iterations (I)'].astype(str)
-    param['Decoder.Num. of flips'] = param['Decoder.Num. of flips'].astype(str)
-    param['Modem.ROP estimation'] = param['Modem.ROP estimation'].astype(str)
-    param['Simulation.PDF path'] = param['Simulation.PDF path'].astype(str)
     param['Encoder.Buffered'] = param['Encoder.Buffered'].astype(str)
+    param['Polar code.Kernels'] = param['Polar code.Kernels'].astype(str)
+    param['Polar code.Stages'] = param['Polar code.Stages'].astype(str)
+    param['Puncturer.Pattern'] = param['Puncturer.Pattern'].astype(str)
     param['Codec.Symbols Codeword size'] = param['Codec.Symbols Codeword size'].astype(str)
     param['Codec.Symbols Source size'] = param['Codec.Symbols Source size'].astype(str)
     param['Decoder.Max type'] = param['Decoder.Max type'].astype(str)
@@ -1530,6 +1497,11 @@ def apply_typing_code():
     param['Encoder.Polynomials'] = param['Encoder.Polynomials'].astype(str)
     param['Encoder.Standard'] = param['Encoder.Standard'].astype(str)
     param['Encoder.Tail length'] = param['Encoder.Tail length'].astype(str)
+    param['Decoder.Num. of lists (L)'] = param['Decoder.Num. of lists (L)'].astype(str)
+    param['Decoder.Normalize factor'] = param['Decoder.Normalize factor'].astype(str)
+    param['Source.Auto reset'] = param['Source.Auto reset'].astype(str)
+    param['Source.Fifo mode'] = param['Source.Fifo mode'].astype(str)
+    param['Source.Path'] = param['Source.Path'].astype(str)
     param['Flip and check.Enabled'] = param['Flip and check.Enabled'].astype(str)
     param['Scaling factor.Enabled'] = param['Scaling factor.Enabled'].astype(str)
     param['Scaling factor.SF iterations'] = param['Scaling factor.SF iterations'].astype(str)
@@ -1538,20 +1510,35 @@ def apply_typing_code():
     param['Flip and check.FNC ite min'] = param['Flip and check.FNC ite min'].astype(str)
     param['Flip and check.FNC ite step'] = param['Flip and check.FNC ite step'].astype(str)
     param['Flip and check.FNC q'] = param['Flip and check.FNC q'].astype(str)
+    param['Modem.Max type'] = param['Modem.Max type'].astype(str)
+    param['Frozen bits generator.Path'] = param['Frozen bits generator.Path'].astype(str)
     param['Modem.Codebook'] = param['Modem.Codebook'].astype(str)
     param['Modem.Number of iterations'] = param['Modem.Number of iterations'].astype(str)
     param['Modem.Psi function'] = param['Modem.Psi function'].astype(str)
-    param['Channel.Block fading policy'] = param['Channel.Block fading policy'].astype(str)
     param['Interleaver.Number of columns'] = param['Interleaver.Number of columns'].astype(str)
+    param['Channel.Block fading policy'] = param['Channel.Block fading policy'].astype(str)
+    param['Modem.CPM L memory'] = param['Modem.CPM L memory'].astype(str)
+    param['Modem.CPM h index'] = param['Modem.CPM h index'].astype(str)
+    param['Modem.CPM mapping'] = param['Modem.CPM mapping'].astype(str)
+    param['Modem.CPM sampling factor'] = param['Modem.CPM sampling factor'].astype(str)
+    param['Modem.CPM standard'] = param['Modem.CPM standard'].astype(str)
+    param['Modem.CPM wave shape'] = param['Modem.CPM wave shape'].astype(str)
+    param['Decoder.Num. of flips'] = param['Decoder.Num. of flips'].astype(str)
+    param['Interleaver.Path'] = param['Interleaver.Path'].astype(str)
+    param['Simulation.Global iterations (I)'] = param['Simulation.Global iterations (I)'].astype(str)
+    param['Modem.ROP estimation'] = param['Modem.ROP estimation'].astype(str)
+    param['Simulation.PDF path'] = param['Simulation.PDF path'].astype(str)
     pn.state.cache['db']['param'] = param
 
-    # Typage pour log
-    log = pn.state.cache['db']['log']
-    log['log'] = log['log'].astype(str)
-    log['hash'] = log['hash'].astype(str)
-    log['filename'] = log['filename'].astype(str)
-    log['Date_Execution'] = log['Date_Execution'].astype(str)
-    pn.state.cache['db']['log'] = log
+    # Typage pour logs
+    logs = pn.state.cache['db']['logs']
+    logs['log'] = logs['log'].astype(str)
+    logs['hash'] = logs['hash'].astype(str)
+    logs['filename'] = logs['filename'].astype(str)
+    logs['Date_Execution'] = logs['Date_Execution'].astype(str)
+    pn.state.cache['db']['logs'] = logs
+
+
 
 
 
