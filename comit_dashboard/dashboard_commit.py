@@ -45,7 +45,10 @@ print(ud.unidata_version)
 ##################################### Niveau Global ####################################
 
 # Initialiser Panel
-pn.extension("plotly", sizing_mode="stretch_width")  # Adapter la taille des widgets et graphiques à la largeur de l'écran
+pn.extension(
+    "plotly", 
+    sizing_mode="stretch_width", 
+    )
 
 ##################################### Variable statiques ####################################
 noise_label = {
@@ -355,6 +358,8 @@ class ConfigUniqueModel(param.Parameterized):
     value = param.Selector(default=None, objects=[])
     date = param.Selector(default=None, objects=[])
 
+    change = param.Event()
+
     @property
     def _df_configs_from_lvl2(self):
         """Accès sécurisé au DataFrame."""
@@ -364,7 +369,7 @@ class ConfigUniqueModel(param.Parameterized):
     def df(self):
         if self.value is None:
             return self._df_configs_from_lvl2.iloc[0:0]  # DataFrame vide
-        return self._df_configs_from_lvl2[self._df_configs_from_lvl2['command_id'] == self.value]
+        return self._df_configs_from_lvl2.loc[self.value]
 
     @property
     def df_runs(self):
@@ -386,13 +391,18 @@ class ConfigUniqueModel(param.Parameterized):
     def log(self):
         df_logs = self.df_logs
         if self.date is None or df_logs.empty:
-            return "Pas de logs pour la sélection."
+            return "```Pas de logs pour la sélection.```"
         
         match = df_logs[df_logs['Date_Execution'] == self.date]
         if match.empty:
-            return "Aucun log trouvé pour cette date."
+            return "```Aucun log trouvé pour cette date.```"
         
-        return match.iloc[0]['log'] if 'contenu' in match.columns else "Colonne 'contenu' manquante."
+        if 'log' in match.columns:
+            # Encapsuler le log dans un bloc de code Markdown
+            contenu = match.iloc[0]['log']
+            return f"```\n{contenu}\n```"
+        else:
+            return "```Colonne 'log' manquante.```"
 
     @param.depends('value', watch=True)
     def _update_date(self):
@@ -400,14 +410,21 @@ class ConfigUniqueModel(param.Parameterized):
             self.date = self.df_logs['Date_Execution'].iloc[0]
         else:
             self.date = None
+            
+    @property
+    def options_dates(self):
+        """Liste des dates d'exécution disponibles pour la configuration sélectionnée."""
+        df_logs = self.df_logs
+        if df_logs.empty or 'Date_Execution' not in df_logs.columns:
+            return []
+        # Conversion en str pour l'affichage (utile pour un widget Select)
+        return df_logs['Date_Execution'].astype(str).unique().tolist()
 
     @property
     def options_alias(self):
-        if self.lv2_model is None or self.lv2_model.df.empty:
-            return []
-        return self.lv2_model.df['Config_Alias'].tolist()
+        return self._df_configs_from_lvl2['Config_Alias'].tolist()
 
-    def find_id_by_alias(self, alias):
+    def _find_id_by_alias(self, alias):
         df = self._df_configs_from_lvl2
         if df.empty or 'Config_Alias' not in df.columns:
             return None
@@ -420,29 +437,17 @@ class ConfigUniqueModel(param.Parameterized):
         return self._df_configs_from_lvl2.at[self.value, 'Config_Alias']
 
     def value_by_alias(self, alias):
-        id = self.find_id_by_alias(alias)
+        id = self._find_id_by_alias(alias)
         if id is not None:
             self.value = id
 
-    # def set_value(self, val):
-    #     """
-    #     Met à jour `value` en acceptant un command_id ou un alias.
-    #     Si la valeur n'est pas reconnue, ne fait rien.
-    #     """
-    #     if val in self._df_configs_from_lvl2.index:
-    #         self.value = val
-    #     else:
-    #         id = self.find_id_by_alias(val)
-    #         if id is not None:
-    #             self.value = id
 
     @param.depends('lv2_model.df', watch=True)
-    def _update_value_from_lvl2(self):
-        opts = self.options_alias
+    def _on_lvl2_df_change(self):
+        opts = self._df_configs_from_lvl2
         # Initialise la valeur avec le command_id correspondant au premier alias
-        if opts:
-            first_alias = opts[0]
-            self.value = self.find_id_by_alias(first_alias)
+        if not opts.empty:
+            self.value = opts.index[0]
         else:
             self.value = None
 
@@ -1047,42 +1052,52 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
 class ConfigUniqueSelector(pn.viewable.Viewer):
     model = param.ClassSelector(class_=ConfigUniqueModel)
 
+
     def __init__(self, **params):
         super().__init__(**params)
 
+        # RadioBoxGroup initialisé avec les alias disponibles
         self.selector = pn.widgets.RadioBoxGroup(
-            name='Configurations', 
+            name='Configurations',
             options=self.model.options_alias,
-            value=self.model.options_alias[0] if self.model.options_alias else '-', 
+            value=self.model.alias() if self.model.alias() != '-' else None,
             inline=False
         )
-        self.model.param.watch(self._update_radio_group, "value")
-        self.selector.param.watch(self._update_value, "value")
 
+        # Lorsque self.model.value change, on met à jour la sélection
+        self.model.param.watch(self._sync_selector_from_model, 'value')
 
-    def _update_value(self, event):
-        self.model.value_by_alias(self.selector.value)
+        # Lorsque l'utilisateur change la sélection, on met à jour self.model.value
+        self.selector.param.watch(self._sync_model_from_selector, 'value')
 
-
-    @pn.depends('model.value', watch=True)
-    def _update_model_value(self, event=None):
-        if event and event.new is not None:
+    def _sync_model_from_selector(self, event):
+        """Binde la sélection (alias) vers le model.value."""
+        if event.new:
             self.model.value_by_alias(event.new)
         else:
             self.model.value = None
 
-    def _update_radio_group(self, *events):
-        config_list = self.model.options_alias
-
-        self.selector.options = config_list
-        self.selector.value = config_list[0] if config_list else '-'
-        self.selector.disabled = not bool(config_list)
+    @pn.depends('model.value', watch=True)
+    def _sync_selector_from_model(self, event=None):
+        """Binde model.value → sélection du RadioBoxGroup."""
+        opts = self.model.options_alias
+        self.selector.options  = opts
+        
+        alias = self.model.alias()
+        # Si l'alias du model n'est pas dans les options, on désactive
+        if not alias == '-':
+            self.selector.value = alias
+            self.selector.disabled = False
+        else:
+            self.selector.value = None
+            self.selector.disabled = True
 
     def __panel__(self):
         return pn.Column(
             pn.pane.Markdown("**Configurations :**"),
             self.selector
         )
+
 
 ####################################
 ## Affichage des journeaux d'exec ##
@@ -1102,71 +1117,28 @@ class LogViewer(pn.viewable.Viewer):
         self.unique_conf_model.param.watch(self._update_dates, "value")
         self.date_selector.param.watch(self._update_log, "value")
 
-    def _update_tabs(self, event=None):
-        if 'log_hash' in self.unique_conf_model.df_ref.columns:
-            log_df = self.unique_conf_model.df_logs
-            if not log_df.empty :
-                log_text = log_df.iloc[0]
-                self.output_pane.object = f"### Fichier output\n```\n{log_text}\n```"
-                return
-
-            self.output_pane.object = f"### Fichier output\n```\nLog introuvable pour le hash : {log_hash}.\n```"
-        else:
-            self.output_pane.object = "### Fichier output\n```\nAucun log disponible.\n```"
-
+    @pn.depends('unique_conf_model.value', watch=True)
     def _update_dates(self, event=None):
-        if self.unique_conf_model.value is None or self.unique_conf_model.df_ref is None or self.unique_conf_model.df_ref.empty:
-            self.date_selector.visible = False
-            self.output_pane.object = "### Fichier output\n```\nAucune configuration sélectionnée.\n```"
-            return
+        self.date_selector.options = self.unique_conf_model.options_dates
+        self.date_selector.value = self.unique_conf_model.date
+        self.output_pane.object = self.unique_conf_model.log
 
-        commit_id = self.unique_conf_model.value
-        df = self.unique_conf_model.df
-
-        filtered = df[df['Commit_id'] == commit_id] if 'Commit_id' in df.columns else df
-
-        if not filtered.empty and 'Date_Execution' in filtered.columns:
-            dates = filtered['Date_Execution'].astype(str).unique().tolist()
-            self.date_selector.options = dates
-            self.date_selector.value = dates[0]
+        if not self.unique_conf_model.date is None :
             self.date_selector.visible = True
         else:
-            self.date_selector.options = []
             self.date_selector.visible = False
-            self.output_pane.object = "### Fichier output\n```\nAucun log disponible pour ce commit.\n```"
 
 
     def _update_log(self, event=None):
-        commit_id = self.unique_conf_model.value
-        selected_date = self.date_selector.value
-        db = pn.state.cache['db']
-        if 'log' not in db:
-            self.output_pane.object = "### Fichier output\n```\nBase de données de logs non disponible.\n```"
-            return
-
-        log_df = db['log']
-
-        if commit_id and selected_date:
-            filtered = log_df[
-                (log_df['Commit_id'] == commit_id) &
-                (log_df['Date_Execution'].astype(str) == selected_date)
-            ]
-            if not filtered.empty and 'Log' in filtered.columns:
-                log_text = filtered['Log'].iloc[0]
-                self.output_pane.object = f"### Log du {selected_date}\n```\n{log_text}\n```"
-            else:
-                self.output_pane.object = f"### Log du {selected_date}\n```\nAucun log trouvé.\n```"
+        self.output_pane.object = self.unique_conf_model.log
 
 
     def __panel__(self):
         # Affichage du sélecteur et des onglets
         return pn.Column(
             self.radioBoutton,
-            pn.Row(
-                self.date_selector,
-                self.output_pane,
-                sizing_mode="stretch_width"
-            ),
+            self.date_selector,
+            self.output_pane,
             sizing_mode="stretch_width")
 
 ######################
@@ -1350,7 +1322,7 @@ async def load_data():
         # "meta": df_meta,
         "param": df_param,
         "config_aliases": config_aliases,
-        "log": df_log
+        "logs": df_log
     }
 
     # Afficher les types de données des DataFrames pour générer le typage des fichiers json depuis les parquets (utile pour le développement)
