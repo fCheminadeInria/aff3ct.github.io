@@ -2,7 +2,7 @@ const CACHE_NAME = 'panel-cache-v1';
 
 // Liste des ressources à mettre en cache (ajoutez les fichiers externes ici)
 const urlsToCache = [
-  '/comit_dashboard/dashboard_commit.min.js',   // Votre script généré par Panel
+  '/comit_dashboard/dashboard_commit.js',   // Votre script généré par Panel
   '/comit_dashboard/pyodide.js',                // Pyodide
   '/comit_dashboard/pyodide.wasm',              // WebAssembly de Pyodide
   'https://cdn.holoviz.org/panel/1.5.3/dist/bundled/reactiveesm/es-module-shims@^1.10.0/dist/es-module-shims.min.js',
