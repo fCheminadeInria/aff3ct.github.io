@@ -8,9 +8,11 @@ import argparse
 import re
 try:
     from pyodide.http import open_url
+    from pyodide.http import pyfetch
 except ModuleNotFoundError:
     # Utiliser un fallback avec urllib en environnement standard
     from urllib.request import urlopen as open_url
+    pyfetch = None
     
 import plotly.graph_objs as go
 import plotly.express as px
@@ -26,7 +28,6 @@ import os
 
 IS_PYODIDE = sys.platform == "emscripten"
 IS_PANEL_CONVERT = os.getenv("PANEL_CONVERT") == "1"
-
 # PANEL_CONVERT=1 panel convert ./comit_dashboard/dashboard_commit.py --to pyodide-worker --out ./comit_dashboard/
 
 if IS_PANEL_CONVERT:
@@ -1232,10 +1233,12 @@ async def load_table(name: str, fmt: str = "parquet") -> pd.DataFrame:
     url = f"{GITLAB_PACKAGE_URL}{name}.{fmt}"
 
     try:
-        if IS_PYODIDE or IS_PANEL_CONVERT:
-            from pyodide.http import pyfetch
+        if IS_PYODIDE :
             response = await pyfetch(url)
             data = await response.bytes()
+        elif IS_PANEL_CONVERT :
+            with open_url(url) as response:
+                data = response.read()
         else:
             import httpx
             import pyarrow.parquet as pq
