@@ -333,7 +333,11 @@ class Lvl2_Filter_Model(param.Parameterized):
         self.value = [v for v in self.value if v in df_filtered.index]
         self.options = df_filtered[['Config_Alias']]
 
-        
+    @property
+    def df_runs_filtred(self):
+        df_runs = pn.state.cache['db']['runs']
+        df_runs = df_runs[df_runs["Command_id"].isin(self.value)]
+        return  df_runs
             
     def _update_df(self, *events):
         self.df = self.command_filter.get_filtered_df().loc[self.value]     
@@ -345,24 +349,57 @@ class Lvl2_Filter_Model(param.Parameterized):
 ##################################################
 ## Gestion des données niveau 3 : config unique ##
 ##################################################
-    
-import param
-import pandas as pd
 
 class ConfigUniqueModel(param.Parameterized):
     lv2_model = param.ClassSelector(default=None, class_=Lvl2_Filter_Model)
     value = param.Selector(default=None, objects=[])
+    date = param.Selector(default=None, objects=[])
 
     @property
-    def df_ref(self):
+    def _df_configs_from_lvl2(self):
         """Accès sécurisé au DataFrame."""
         return self.lv2_model.df if self.lv2_model is not None else pd.DataFrame()
 
     @property
     def df(self):
         if self.value is None:
-            return self.df_ref.iloc[0:0]  # DataFrame vide
-        return self.df_ref[self.df_ref['command_id'] == self.value]
+            return self._df_configs_from_lvl2.iloc[0:0]  # DataFrame vide
+        return self._df_configs_from_lvl2[self._df_configs_from_lvl2['command_id'] == self.value]
+
+    @property
+    def df_runs(self):
+        db = pn.state.cache.get('db', {})
+        if 'runs' not in db or self.value is None:
+            return pd.DataFrame()
+        return  db['runs'][db['runs']['Command_id']== self.value]        
+
+    @property
+    def df_logs(self):
+        db = pn.state.cache.get('db', {})
+        if 'logs' not in db or self.value is None:
+            return pd.DataFrame()
+        df_logs = db['logs']
+        log_hash = self.df_runs['log_hash'].unique() if not self.df_runs.empty else []
+        return  df_logs[df_logs['hash'].isin(log_hash)]
+
+    @property
+    def log(self):
+        df_logs = self.df_logs
+        if self.date is None or df_logs.empty:
+            return "Pas de logs pour la sélection."
+        
+        match = df_logs[df_logs['Date_Execution'] == self.date]
+        if match.empty:
+            return "Aucun log trouvé pour cette date."
+        
+        return match.iloc[0]['log'] if 'contenu' in match.columns else "Colonne 'contenu' manquante."
+
+    @param.depends('value', watch=True)
+    def _update_date(self):
+        if 'hash' in self.df_logs.columns :
+            self.date = self.df_logs['Date_Execution'].iloc[0]
+        else:
+            self.date = None
 
     @property
     def options_alias(self):
@@ -371,36 +408,36 @@ class ConfigUniqueModel(param.Parameterized):
         return self.lv2_model.df['Config_Alias'].tolist()
 
     def find_id_by_alias(self, alias):
-        df = self.df_ref
+        df = self._df_configs_from_lvl2
         if df.empty or 'Config_Alias' not in df.columns:
             return None
         matched = df.index[df['Config_Alias'] == alias]
         return matched[0] if len(matched) > 0 else None
 
     def alias(self):
-        if self.value is None or self.value not in self.df_ref.index:
+        if self.value is None or self.value not in self._df_configs_from_lvl2.index:
             return '-'
-        return self.df_ref.at[self.value, 'Config_Alias']
+        return self._df_configs_from_lvl2.at[self.value, 'Config_Alias']
 
     def value_by_alias(self, alias):
         id = self.find_id_by_alias(alias)
         if id is not None:
             self.value = id
 
-    def set_value(self, val):
-        """
-        Met à jour `value` en acceptant un command_id ou un alias.
-        Si la valeur n'est pas reconnue, ne fait rien.
-        """
-        if val in self.df_ref.index:
-            self.value = val
-        else:
-            id = self.find_id_by_alias(val)
-            if id is not None:
-                self.value = id
+    # def set_value(self, val):
+    #     """
+    #     Met à jour `value` en acceptant un command_id ou un alias.
+    #     Si la valeur n'est pas reconnue, ne fait rien.
+    #     """
+    #     if val in self._df_configs_from_lvl2.index:
+    #         self.value = val
+    #     else:
+    #         id = self.find_id_by_alias(val)
+    #         if id is not None:
+    #             self.value = id
 
     @param.depends('lv2_model.df', watch=True)
-    def _update_value_from_selector(self):
+    def _update_value_from_lvl2(self):
         opts = self.options_alias
         # Initialise la valeur avec le command_id correspondant au premier alias
         if opts:
@@ -707,8 +744,7 @@ class ConfigPanel(pn.viewable.Viewer):
 
     def clear_configs(self, event=None):
         self.config_selector.value = []
-
-       
+      
 # affichage de la sélection     
 class TableConfig(pn.viewable.Viewer):
     lv2_filter = param.ClassSelector(class_=Lvl2_Filter_Model)
@@ -897,7 +933,6 @@ class Panel_graph_envelope(pn.viewable.Viewer):
 
 class Mutual_information_Panels (pn.viewable.Viewer) :
     # Paramètres configurables
-    df = param.DataFrame(doc="Le dataframe contenant les données")
     lv2_model = param.ClassSelector(default=None, class_=Lvl2_Filter_Model)
     index_selecter = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
     noiseScale = param.ClassSelector(default=None, class_=pn.viewable.Viewer,doc="Choix de l'échelle de bruit par passage du label de la colonne")
@@ -907,12 +942,14 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
         
         self.colors = itertools.cycle(px.colors.qualitative.Plotly)
         
+        
+        df =self.lv2_model.df_runs_filtred
         cols = ["Mutual Information.MI", "Mutual Information.MI_min", "Mutual Information.MI_max", "Mutual Information.n_trials"]
-        self.df = self.df [ self.df[cols].notnull().any(axis=1) ]
+        df = df [ df[cols].notnull().any(axis=1) ]
         
         self.plot_mutual_information = Panel_graph_envelope(
             lv2_model = self.lv2_model,
-            df = self.df,
+            df = df,
             lab   ="Mutual Information.MI", 
             labmin="Mutual Information.MI_min", 
             labmax="Mutual Information.MI_max", 
@@ -933,11 +970,9 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
         )
     
  
-    def _plottrial(self, index, noiseKey): 
-        if index is None  :
-            df_filtred = self.df
-        else :
-            df_filtred = self.df[self.df["Command_id"].isin(index)] 
+    def _plottrial(self, index, noiseKey):
+        ''' graphe de Nombre d'essais'''
+        df_filtred = self.lv2_model.df_runs_filtred
         
         # Si pas de données de tâches pour les configurations sélectionnées
         if df_filtred.empty:
@@ -949,7 +984,18 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
         # Ajouter une trace pour chaque configuration et tâche
         for i, config in enumerate(index):
             # Filtrer les données pour chaque configuration
-            config_data = df_filtred['Command_id'][config]
+            matching_runs = df_filtred.index[df_filtred['Command_id'] == config]
+            config_data = df_filtred.loc[matching_runs]
+            
+            # Vérifier que les colonnes existent et ne sont pas toutes NaN
+            if noiseKey not in config_data.columns or "Mutual Information.n_trials" not in config_data.columns:
+                continue  # Colonnes manquantes
+
+            config_data = config_data.dropna(subset=[noiseKey, "Mutual Information.n_trials"])
+
+            if config_data.empty:
+                continue  # Plus de données après nettoyage
+            
             snr = config_data[noiseKey]
             n_trials = config_data["Mutual Information.n_trials"]         
                 
@@ -960,6 +1006,11 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
                 name=f"Nombre d'essais - {config}"  
             ))
         
+        if not fig.data:
+            return pn.pane.Markdown(
+                "Mutual Information : Données insuffisantes (valeurs NaN ou colonnes manquantes) pour les configurations sélectionnées."
+            )
+                
         # Configuration de la mise en page avec Range Slider et Range Selector
         fig.update_layout(
             title="Nombre d'essais en fonction du SNR pour chaque configuration",
@@ -987,8 +1038,6 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
         
         return  pn.pane.Plotly(fig, sizing_mode="stretch_width")
 
-
-
 ##################################### Niveau 3 : Commande ####################################
 
 ###################################################
@@ -1007,8 +1056,13 @@ class ConfigUniqueSelector(pn.viewable.Viewer):
             value=self.model.options_alias[0] if self.model.options_alias else '-', 
             inline=False
         )
-
         self.model.param.watch(self._update_radio_group, "value")
+        self.selector.param.watch(self._update_value, "value")
+
+
+    def _update_value(self, event):
+        self.model.value_by_alias(self.selector.value)
+
 
     @pn.depends('model.value', watch=True)
     def _update_model_value(self, event=None):
@@ -1035,45 +1089,39 @@ class ConfigUniqueSelector(pn.viewable.Viewer):
 ####################################
 
 class LogViewer(pn.viewable.Viewer):
-    model = param.ClassSelector(default=None, class_=ConfigUniqueModel)
+    unique_conf_model = param.ClassSelector(default=None, class_=ConfigUniqueModel)
     
     def __init__(self, **params):
         super().__init__(**params)
         
         self.output_pane = pn.pane.Markdown("Sélectionnez une configuration pour voir les fichiers.")
-        self.radioBoutton = ConfigUniqueSelector(name="One Configuration Selection", model= self.model)
+        self.radioBoutton = ConfigUniqueSelector(name="One Configuration Selection", model= self.unique_conf_model)
         
         self.date_selector = pn.widgets.Select(name="Date d'exécution", options=[], visible=False)
 
-        self.model.param.watch(self._update_dates, "value")
+        self.unique_conf_model.param.watch(self._update_dates, "value")
         self.date_selector.param.watch(self._update_log, "value")
 
     def _update_tabs(self, event=None):
-        if 'log_hash' in self.model.df_ref.columns:
-            log_hash = self.model.df_ref['log_hash'].iloc[0]
-
-            db = pn.state.cache['db']
-            if 'log' in db and not db['log'].empty:
-                log_df = db['log']
-                if 'log_hash' in log_df.columns and log_hash in log_df['log_hash'].values:
-                    log_text = log_df.loc[log_df['log_hash'] == log_hash, 'log_content'].iloc[0]
-                    self.output_pane.object = f"### Fichier output\n```\n{log_text}\n```"
-                    return
+        if 'log_hash' in self.unique_conf_model.df_ref.columns:
+            log_df = self.unique_conf_model.df_logs
+            if not log_df.empty :
+                log_text = log_df.iloc[0]
+                self.output_pane.object = f"### Fichier output\n```\n{log_text}\n```"
+                return
 
             self.output_pane.object = f"### Fichier output\n```\nLog introuvable pour le hash : {log_hash}.\n```"
         else:
             self.output_pane.object = "### Fichier output\n```\nAucun log disponible.\n```"
 
-
-
     def _update_dates(self, event=None):
-        if self.model.value is None or self.model.df_ref is None or self.model.df_ref.empty:
+        if self.unique_conf_model.value is None or self.unique_conf_model.df_ref is None or self.unique_conf_model.df_ref.empty:
             self.date_selector.visible = False
             self.output_pane.object = "### Fichier output\n```\nAucune configuration sélectionnée.\n```"
             return
 
-        commit_id = self.model.value
-        df = self.model.df
+        commit_id = self.unique_conf_model.value
+        df = self.unique_conf_model.df
 
         filtered = df[df['Commit_id'] == commit_id] if 'Commit_id' in df.columns else df
 
@@ -1089,7 +1137,7 @@ class LogViewer(pn.viewable.Viewer):
 
 
     def _update_log(self, event=None):
-        commit_id = self.model.value
+        commit_id = self.unique_conf_model.value
         selected_date = self.date_selector.value
         db = pn.state.cache['db']
         if 'log' not in db:
@@ -1220,8 +1268,7 @@ class Tasks_Histogramme(pn.viewable.Viewer):
 ## Chargement des données depuis Gitlab ###
 ###########################################
 
-GITLAB_PACKAGE_URL = "https://gitlab.inria.fr/api/v4/projects/1420/packages/generic/elk-export/latest/"
-
+GITLAB_PACKAGE_URL = "https://gitlab.inria.fr/api/v4/projects/1420/packages/generic/gitlab-elk-export/latest/"
 
 async def load_table(name: str, fmt: str = "parquet") -> pd.DataFrame:
     url = f"{GITLAB_PACKAGE_URL}{name}.{fmt}"
@@ -1265,13 +1312,14 @@ async def load_data():
         fmt='json'
     else:    
         fmt = 'parquet'
+        #fmt='json'
     
     df_commands = await load_table('command', fmt=fmt)
     df_commands.set_index('Command_id', inplace=True)
     
 
-    df_meta = await load_table('meta', fmt=fmt)
-    df_meta.set_index('meta_id', inplace=True)
+    # df_meta = await load_table('meta', fmt=fmt)
+    # df_meta.set_index('meta_id', inplace=True)
 
 
     df_param = await load_table('parameters', fmt=fmt)
@@ -1287,8 +1335,8 @@ async def load_data():
     df_git.set_index('sha1', inplace=True)
     # df_git['date'] = pd.to_datetime(df_git['date'], utc=True)
 
-    # df_log = await load_table('logs', fmt=fmt)
-    # df_log.set_index('sha1', inplace=True)
+    df_log = await load_table('logs', fmt=fmt)
+    df_log.set_index('Log_id', inplace=True)
 
     # Générer Config_Alias depuis config
     df_commands['Config_Alias'] = df_commands.index + " : " + df_commands['Command_short'] + "_" + df_commands['sha1']
@@ -1299,10 +1347,10 @@ async def load_data():
         "tasks": df_tasks,
         "runs": df_runs,
         "git": df_git,
-        "meta": df_meta,
+        # "meta": df_meta,
         "param": df_param,
         "config_aliases": config_aliases,
-        # "log": df_log
+        "log": df_log
     }
 
     # Afficher les types de données des DataFrames pour générer le typage des fichiers json depuis les parquets (utile pour le développement)
@@ -1316,10 +1364,10 @@ async def load_data():
         apply_typing_code()
 
 def generate_typing_code(df, df_name="df"):
-    ''' Génère du code Python exécutable pour forcer le typage des colonnes du DataFrame '''
+    ''' Génère du code Python exécutable pour forcer le typage des colonnes dans pn.state.cache["db"][df_name] '''
     lines = [
-        "import pandas as pd",
-        f"# Typage pour {df_name}"
+        f"# Typage pour {df_name}",
+        f"{df_name} = pn.state.cache['db']['{df_name}']"
     ]
     
     for col in df.columns:
@@ -1336,12 +1384,204 @@ def generate_typing_code(df, df_name="df"):
         else:
             lines.append(f"{df_name}['{col}'] = {df_name}['{col}'].astype(str)")
 
+    # Réassigner dans le cache (non strictement nécessaire mais plus explicite)
+    lines.append(f"pn.state.cache['db']['{df_name}'] = {df_name}")
+
     return "\n".join(lines)
 
     
 def apply_typing_code():
     ''' Applique le typage des données  (copier coller du résultat de generate_typing_code) ''' 
-    
+    # Typage pour commands
+    commands = pn.state.cache['db']['commands']
+    commands['Command'] = commands['Command'].astype(str)
+    commands['sha1'] = commands['sha1'].astype(str)
+    commands['Command_short'] = commands['Command_short'].astype(str)
+    commands['param_id'] = commands['param_id'].astype(str)
+    commands['Config_Alias'] = commands['Config_Alias'].astype(str)
+    pn.state.cache['db']['commands'] = commands
+
+    # Typage pour tasks
+    tasks = pn.state.cache['db']['tasks']
+    pn.state.cache['db']['tasks'] = tasks
+
+    # Typage pour runs
+    runs = pn.state.cache['db']['runs']
+    runs['log_hash'] = runs['log_hash'].astype(str)
+    runs['Date_Execution'] = pd.to_datetime(runs['Date_Execution'], errors='coerce')
+    runs['Bit Error Rate (BER) and Frame Error Rate (FER).BE'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).BE'], errors='coerce').astype('Int64')
+    runs['Bit Error Rate (BER) and Frame Error Rate (FER).BER'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).BER'], errors='coerce')
+    runs['Bit Error Rate (BER) and Frame Error Rate (FER).FE'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).FE'], errors='coerce').astype('Int64')
+    runs['Bit Error Rate (BER) and Frame Error Rate (FER).FER'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).FER'], errors='coerce')
+    runs['Bit Error Rate (BER) and Frame Error Rate (FER).FRA'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).FRA'], errors='coerce').astype('Int64')
+    runs['Global throughputand elapsed time.SIM_THR(Mb/s)'] = pd.to_numeric(runs['Global throughputand elapsed time.SIM_THR(Mb/s)'], errors='coerce')
+    runs['Global throughputand elapsed time.elapse_time(ns)'] = pd.to_numeric(runs['Global throughputand elapsed time.elapse_time(ns)'], errors='coerce')
+    runs['Signal Noise Ratio(SNR).Eb/N0(dB)'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Eb/N0(dB)'], errors='coerce')
+    runs['Signal Noise Ratio(SNR).Es/N0(dB)'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Es/N0(dB)'], errors='coerce')
+    runs['Signal Noise Ratio(SNR).Sigma'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Sigma'], errors='coerce')
+    runs['source.type'] = runs['source.type'].astype(str)
+    runs['id'] = runs['id'].astype(str)
+    runs['url'] = runs['url'].astype(str)
+    runs['status'] = runs['status'].astype(str)
+    runs['job_id'] = runs['job_id'].astype(str)
+    runs['job_name'] = runs['job_name'].astype(str)
+    runs['Signal Noise Ratio(SNR).Event Probability'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Event Probability'], errors='coerce')
+    runs['Mutual Information.MI'] = pd.to_numeric(runs['Mutual Information.MI'], errors='coerce')
+    runs['Mutual Information.MI_max'] = pd.to_numeric(runs['Mutual Information.MI_max'], errors='coerce')
+    runs['Mutual Information.MI_min'] = pd.to_numeric(runs['Mutual Information.MI_min'], errors='coerce')
+    runs['Mutual Information.n_trials'] = pd.to_numeric(runs['Mutual Information.n_trials'], errors='coerce')
+    runs['Signal Noise Ratio(SNR).Received Optical'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Received Optical'], errors='coerce')
+    runs['Command_id'] = runs['Command_id'].astype(str)
+    pn.state.cache['db']['runs'] = runs
+
+    # Typage pour git
+    git = pn.state.cache['db']['git']
+    git['author'] = git['author'].astype(str)
+    git['email'] = git['email'].astype(str)
+    git['date'] = pd.to_datetime(git['date'], errors='coerce')
+    git['message'] = git['message'].astype(str)
+    git['insertions'] = pd.to_numeric(git['insertions'], errors='coerce').astype('Int64')
+    git['deletions'] = pd.to_numeric(git['deletions'], errors='coerce').astype('Int64')
+    git['files_changed'] = pd.to_numeric(git['files_changed'], errors='coerce').astype('Int64')
+    pn.state.cache['db']['git'] = git
+
+    # Typage pour param
+    param = pn.state.cache['db']['param']
+    param['CRC.Implementation'] = param['CRC.Implementation'].astype(str)
+    param['CRC.Polynomial (hexadecimal)'] = param['CRC.Polynomial (hexadecimal)'].astype(str)
+    param['CRC.Size (in bit)'] = param['CRC.Size (in bit)'].astype(str)
+    param['CRC.Type'] = param['CRC.Type'].astype(str)
+    param['Channel.Add users'] = param['Channel.Add users'].astype(str)
+    param['Channel.Complex'] = param['Channel.Complex'].astype(str)
+    param['Channel.Implementation'] = param['Channel.Implementation'].astype(str)
+    param['Channel.Type'] = param['Channel.Type'].astype(str)
+    param['Codec.Code rate'] = param['Codec.Code rate'].astype(str)
+    param['Codec.Codeword size (N_cw)'] = param['Codec.Codeword size (N_cw)'].astype(str)
+    param['Codec.Frame size (N)'] = param['Codec.Frame size (N)'].astype(str)
+    param['Codec.Info. bits (K)'] = param['Codec.Info. bits (K)'].astype(str)
+    param['Codec.Type'] = param['Codec.Type'].astype(str)
+    param['Decoder.Implementation'] = param['Decoder.Implementation'].astype(str)
+    param['Decoder.Node type'] = param['Decoder.Node type'].astype(str)
+    param['Decoder.Systematic'] = param['Decoder.Systematic'].astype(str)
+    param['Decoder.Type (D)'] = param['Decoder.Type (D)'].astype(str)
+    param['Encoder.Systematic'] = param['Encoder.Systematic'].astype(str)
+    param['Encoder.Type'] = param['Encoder.Type'].astype(str)
+    param['Frozen bits generator MK.Noise'] = param['Frozen bits generator MK.Noise'].astype(str)
+    param['Frozen bits generator MK.Type'] = param['Frozen bits generator MK.Type'].astype(str)
+    param['Modem.Bits per symbol'] = param['Modem.Bits per symbol'].astype(str)
+    param['Modem.Implementation'] = param['Modem.Implementation'].astype(str)
+    param['Modem.Sigma square'] = param['Modem.Sigma square'].astype(str)
+    param['Modem.Type'] = param['Modem.Type'].astype(str)
+    param['Monitor.Compute mutual info'] = param['Monitor.Compute mutual info'].astype(str)
+    param['Monitor.Frame error count (e)'] = param['Monitor.Frame error count (e)'].astype(str)
+    param['Monitor.Lazy reduction'] = param['Monitor.Lazy reduction'].astype(str)
+    param['Polar code.Kernel'] = param['Polar code.Kernel'].astype(str)
+    param['Simulation.Bad frames replay'] = param['Simulation.Bad frames replay'].astype(str)
+    param['Simulation.Bad frames tracking'] = param['Simulation.Bad frames tracking'].astype(str)
+    param['Simulation.Bit rate'] = param['Simulation.Bit rate'].astype(str)
+    param['Simulation.Code type (C)'] = param['Simulation.Code type (C)'].astype(str)
+    param['Simulation.Coded monitoring'] = param['Simulation.Coded monitoring'].astype(str)
+    param['Simulation.Coset approach (c)'] = param['Simulation.Coset approach (c)'].astype(str)
+    param['Simulation.Date (UTC)'] = param['Simulation.Date (UTC)'].astype(str)
+    param['Simulation.Debug mode'] = param['Simulation.Debug mode'].astype(str)
+    param['Simulation.Git version'] = param['Simulation.Git version'].astype(str)
+    param['Simulation.Inter frame level'] = param['Simulation.Inter frame level'].astype(str)
+    param['Simulation.Json export'] = param['Simulation.Json export'].astype(str)
+    param['Simulation.Multi-threading (t)'] = param['Simulation.Multi-threading (t)'].astype(str)
+    param['Simulation.Noise range'] = param['Simulation.Noise range'].astype(str)
+    param['Simulation.Noise type (E)'] = param['Simulation.Noise type (E)'].astype(str)
+    param['Simulation.Seed'] = param['Simulation.Seed'].astype(str)
+    param['Simulation.Statistics'] = param['Simulation.Statistics'].astype(str)
+    param['Simulation.Type'] = param['Simulation.Type'].astype(str)
+    param['Simulation.Type of bits'] = param['Simulation.Type of bits'].astype(str)
+    param['Simulation.Type of reals'] = param['Simulation.Type of reals'].astype(str)
+    param['Source.Implementation'] = param['Source.Implementation'].astype(str)
+    param['Source.Info. bits (K_info)'] = param['Source.Info. bits (K_info)'].astype(str)
+    param['Source.Type'] = param['Source.Type'].astype(str)
+    param['Terminal.Enabled'] = param['Terminal.Enabled'].astype(str)
+    param['Terminal.Frequency (ms)'] = param['Terminal.Frequency (ms)'].astype(str)
+    param['Terminal.Show Sigma'] = param['Terminal.Show Sigma'].astype(str)
+    param['Polar code.Kernels'] = param['Polar code.Kernels'].astype(str)
+    param['Polar code.Stages'] = param['Polar code.Stages'].astype(str)
+    param['Decoder.Num. of lists (L)'] = param['Decoder.Num. of lists (L)'].astype(str)
+    param['Decoder.Correction power (T)'] = param['Decoder.Correction power (T)'].astype(str)
+    param['Decoder.Galois field order (m)'] = param['Decoder.Galois field order (m)'].astype(str)
+    param['Quantizer.Fixed-point config.'] = param['Quantizer.Fixed-point config.'].astype(str)
+    param['Quantizer.Implementation'] = param['Quantizer.Implementation'].astype(str)
+    param['Quantizer.Type'] = param['Quantizer.Type'].astype(str)
+    param['Simulation.Type of quant. reals'] = param['Simulation.Type of quant. reals'].astype(str)
+    param['Decoder.H matrix path'] = param['Decoder.H matrix path'].astype(str)
+    param['Decoder.H matrix reordering'] = param['Decoder.H matrix reordering'].astype(str)
+    param['Decoder.Num. of iterations (i)'] = param['Decoder.Num. of iterations (i)'].astype(str)
+    param['Decoder.Stop criterion (syndrome)'] = param['Decoder.Stop criterion (syndrome)'].astype(str)
+    param['Decoder.Stop criterion depth'] = param['Decoder.Stop criterion depth'].astype(str)
+    param['Decoder.Weighting factor'] = param['Decoder.Weighting factor'].astype(str)
+    param['Encoder.G build method'] = param['Encoder.G build method'].astype(str)
+    param['Encoder.H matrix path'] = param['Encoder.H matrix path'].astype(str)
+    param['Encoder.H matrix reordering'] = param['Encoder.H matrix reordering'].astype(str)
+    param['Decoder.Bernouilli probas'] = param['Decoder.Bernouilli probas'].astype(str)
+    param['Decoder.Min type'] = param['Decoder.Min type'].astype(str)
+    param['Puncturer.Pattern'] = param['Puncturer.Pattern'].astype(str)
+    param['Puncturer.Type'] = param['Puncturer.Type'].astype(str)
+    param['Decoder.Normalize factor'] = param['Decoder.Normalize factor'].astype(str)
+    param['Decoder.Adaptative mode'] = param['Decoder.Adaptative mode'].astype(str)
+    param['Decoder.Max num. of lists (L)'] = param['Decoder.Max num. of lists (L)'].astype(str)
+    param['Decoder.Polar node types'] = param['Decoder.Polar node types'].astype(str)
+    param['Decoder.SIMD strategy'] = param['Decoder.SIMD strategy'].astype(str)
+    param['Frozen bits generator.Noise'] = param['Frozen bits generator.Noise'].astype(str)
+    param['Frozen bits generator.Type'] = param['Frozen bits generator.Type'].astype(str)
+    param['Source.Auto reset'] = param['Source.Auto reset'].astype(str)
+    param['Source.Fifo mode'] = param['Source.Fifo mode'].astype(str)
+    param['Source.Path'] = param['Source.Path'].astype(str)
+    param['Frozen bits generator.Path'] = param['Frozen bits generator.Path'].astype(str)
+    param['Interleaver.Seed'] = param['Interleaver.Seed'].astype(str)
+    param['Interleaver.Type'] = param['Interleaver.Type'].astype(str)
+    param['Interleaver.Uniform'] = param['Interleaver.Uniform'].astype(str)
+    param['Interleaver.Path'] = param['Interleaver.Path'].astype(str)
+    param['Modem.CPM L memory'] = param['Modem.CPM L memory'].astype(str)
+    param['Modem.CPM h index'] = param['Modem.CPM h index'].astype(str)
+    param['Modem.CPM mapping'] = param['Modem.CPM mapping'].astype(str)
+    param['Modem.CPM sampling factor'] = param['Modem.CPM sampling factor'].astype(str)
+    param['Modem.CPM standard'] = param['Modem.CPM standard'].astype(str)
+    param['Modem.CPM wave shape'] = param['Modem.CPM wave shape'].astype(str)
+    param['Modem.Max type'] = param['Modem.Max type'].astype(str)
+    param['Simulation.Global iterations (I)'] = param['Simulation.Global iterations (I)'].astype(str)
+    param['Decoder.Num. of flips'] = param['Decoder.Num. of flips'].astype(str)
+    param['Modem.ROP estimation'] = param['Modem.ROP estimation'].astype(str)
+    param['Simulation.PDF path'] = param['Simulation.PDF path'].astype(str)
+    param['Encoder.Buffered'] = param['Encoder.Buffered'].astype(str)
+    param['Codec.Symbols Codeword size'] = param['Codec.Symbols Codeword size'].astype(str)
+    param['Codec.Symbols Source size'] = param['Codec.Symbols Source size'].astype(str)
+    param['Decoder.Max type'] = param['Decoder.Max type'].astype(str)
+    param['Decoder.Polynomials'] = param['Decoder.Polynomials'].astype(str)
+    param['Decoder.Standard'] = param['Decoder.Standard'].astype(str)
+    param['Encoder.Polynomials'] = param['Encoder.Polynomials'].astype(str)
+    param['Encoder.Standard'] = param['Encoder.Standard'].astype(str)
+    param['Encoder.Tail length'] = param['Encoder.Tail length'].astype(str)
+    param['Flip and check.Enabled'] = param['Flip and check.Enabled'].astype(str)
+    param['Scaling factor.Enabled'] = param['Scaling factor.Enabled'].astype(str)
+    param['Scaling factor.SF iterations'] = param['Scaling factor.SF iterations'].astype(str)
+    param['Scaling factor.Scaling factor (SF)'] = param['Scaling factor.Scaling factor (SF)'].astype(str)
+    param['Flip and check.FNC ite max'] = param['Flip and check.FNC ite max'].astype(str)
+    param['Flip and check.FNC ite min'] = param['Flip and check.FNC ite min'].astype(str)
+    param['Flip and check.FNC ite step'] = param['Flip and check.FNC ite step'].astype(str)
+    param['Flip and check.FNC q'] = param['Flip and check.FNC q'].astype(str)
+    param['Modem.Codebook'] = param['Modem.Codebook'].astype(str)
+    param['Modem.Number of iterations'] = param['Modem.Number of iterations'].astype(str)
+    param['Modem.Psi function'] = param['Modem.Psi function'].astype(str)
+    param['Channel.Block fading policy'] = param['Channel.Block fading policy'].astype(str)
+    param['Interleaver.Number of columns'] = param['Interleaver.Number of columns'].astype(str)
+    pn.state.cache['db']['param'] = param
+
+    # Typage pour log
+    log = pn.state.cache['db']['log']
+    log['log'] = log['log'].astype(str)
+    log['hash'] = log['hash'].astype(str)
+    log['filename'] = log['filename'].astype(str)
+    log['Date_Execution'] = log['Date_Execution'].astype(str)
+    pn.state.cache['db']['log'] = log
+
+
 
 
 # Performance par niveau de bruit pour les configurations sélectionnées
@@ -1501,7 +1741,6 @@ def init_dashboard():
 
     mi_panel = pn.Column(
         Mutual_information_Panels(
-            df = db['runs'],
             lv2_model = lvl2_filter,
             noiseScale =noiseScale
         ),
@@ -1556,7 +1795,7 @@ def init_dashboard():
 
     panel_par_config = pn.Column(
         pn.pane.HTML("<div style='font-size: 20px;background-color: #e0e0e0; padding: 5px;line-height : 0px;'><h2> ✏️ Logs</h2></div>"),
-        LogViewer(model=unique_model),
+        LogViewer(unique_conf_model=unique_model),
         #TableConfig(lv2_filter=lvl2_filter, meta=True),
         # task_Time_Histogramme,
         # plot_latence,
