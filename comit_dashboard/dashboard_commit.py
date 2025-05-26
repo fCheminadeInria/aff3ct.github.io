@@ -26,23 +26,6 @@ import sys
 import asyncio
 import os
 
-IS_PYODIDE = sys.platform == "emscripten"
-IS_PANEL_CONVERT = os.getenv("PANEL_CONVERT") == "1"
-# PANEL_CONVERT=1 panel convert ./comit_dashboard/dashboard_commit.py --to pyodide-worker --out ./comit_dashboard/
-
-if IS_PANEL_CONVERT:
-    print("🚀 Exécution dans panel.convert !")
-else:
-    print("🖥️ Exécution en Python local.")
-
-
-if IS_PYODIDE:
-    print("🚀 Exécution dans Pyodide !")
-else:
-    print("🖥️ Exécution en Python local.")
-
-print(ud.unidata_version)
-
 ##################################### Niveau Global ####################################
 
 # Initialiser Panel
@@ -1806,8 +1789,8 @@ dashboard = None
 ################################
 ## Démarage selon le contexte ##
 ################################
-
-
+  
+    
 async def startup():
     global dashboard
     await load_data()
@@ -1817,16 +1800,34 @@ async def startup():
     if IS_PYODIDE:
         dashboard.servable()
 
-if IS_PYODIDE:
-    pn.state.onload(startup)
+def convert_startup():
+    """
+    Version synchrone appelée dans Panel Convert
+    """
+    global dashboard
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(load_data())
+    dashboard = init_dashboard()
+    dashboard.servable() 
 
-# Pour panel convert : publication immédiate
-if IS_PANEL_CONVERT :
-    print("panel.convert code")
-    asyncio.run(startup())
-    if dashboard is not None:
-        dashboard.servable()
 
-if __name__ == "__main__":
-    asyncio.run(startup())
-    pn.serve(dashboard, show=True, port=35489)
+def launch():
+    if IS_PYODIDE:
+        pn.state.onload(startup)
+    elif IS_PANEL_CONVERT:
+        print("panel.convert code")
+        convert_startup()
+    elif __name__ == "__main__":
+        # Seulement en local (serveur Python)
+        asyncio.run(startup())
+        pn.serve(dashboard, show=True, port=35489)
+
+
+IS_PYODIDE = sys.platform == "emscripten"
+IS_PANEL_CONVERT = os.getenv("PANEL_CONVERT") == "1"
+# PANEL_CONVERT=1 panel convert ./comit_dashboard/dashboard_commit.py --to pyodide-worker --out ./comit_dashboard/
+
+print(ud.unidata_version)
+
+launch()
