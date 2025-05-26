@@ -1803,16 +1803,22 @@ def init_dashboard():
 
 dashboard = None
 
+################################
+## Démarage selon le contexte ##
+################################
+
+
 async def startup():
     global dashboard
     await load_data()
     dashboard = init_dashboard()
 
     # Publication explicite pour Pyodide
-    if sys.platform == "emscripten":
+    if IS_PYODIDE:
         dashboard.servable()
 
-pn.state.onload(startup)
+if IS_PYODIDE:
+    pn.state.onload(startup)
 
 # Pour panel convert : publication immédiate
 if IS_PANEL_CONVERT :
