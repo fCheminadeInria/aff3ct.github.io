@@ -1784,50 +1784,70 @@ def init_dashboard():
     # Lancer le tableau de bord
 
 
-dashboard = None
-
 ################################
 ## Démarage selon le contexte ##
 ################################
-  
-    
+
+# Variables globales
+dashboard = None
+
+# Détection de l'environnement AVANT les définitions de fonctions
+IS_PYODIDE = sys.platform == "emscripten"
+IS_PANEL_CONVERT = os.getenv("PANEL_CONVERT") == "1"
+
 async def startup():
+    """Version asynchrone pour Pyodide"""
     global dashboard
     await load_data()
     dashboard = init_dashboard()
-
-    # Publication explicite pour Pyodide
+    
+    # Pour Pyodide, on utilise servable()
     if IS_PYODIDE:
         dashboard.servable()
+    
+    return dashboard
 
 def convert_startup():
-    """
-    Version synchrone appelée dans Panel Convert
-    """
+    """Version synchrone pour Panel Convert"""
     global dashboard
-    import asyncio
-    loop = asyncio.get_event_loop()
+    
+    # Créer une nouvelle boucle d'événements si nécessaire
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    # Exécuter le chargement des données
     loop.run_until_complete(load_data())
     dashboard = init_dashboard()
-    dashboard.servable() 
-
+    dashboard.servable()
+    
+    return dashboard
 
 def launch():
+    """Point d'entrée principal"""
+    global dashboard
+    
     if IS_PYODIDE:
+        # Pour Pyodide, utiliser onload
+        print("Mode Pyodide détecté")
         pn.state.onload(startup)
+        
     elif IS_PANEL_CONVERT:
-        print("panel.convert code")
+        # Pour panel convert
+        print("Mode Panel Convert détecté")
         convert_startup()
-    elif __name__ == "__main__":
-        # Seulement en local (serveur Python)
+        
+    else:
+        # Mode développement local
+        print("Mode développement local")
         asyncio.run(startup())
         pn.serve(dashboard, show=True, port=35489)
 
-
-IS_PYODIDE = sys.platform == "emscripten"
-IS_PANEL_CONVERT = os.getenv("PANEL_CONVERT") == "1"
-# PANEL_CONVERT=1 panel convert ./comit_dashboard/dashboard_commit.py --to pyodide-worker --out ./comit_dashboard/
-
+# Point d'entrée
 print(ud.unidata_version)
-
 launch()
