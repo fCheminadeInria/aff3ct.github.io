@@ -1801,7 +1801,7 @@ async def startup():
     await load_data()
     dashboard = init_dashboard()
     dashboard.servable()
-    
+    print("📦 Dashboard marqué comme servable")
     if IS_PYODIDE: 
         await pn.io.pyodide.write_doc()
     
