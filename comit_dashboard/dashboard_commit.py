@@ -1803,7 +1803,7 @@ async def startup():
     
     if IS_PYODIDE:
         dashboard.servable()
-        pn.io.pyodide.write_doc()
+        await pn.io.pyodide.write_doc()
     
     
     return dashboard
