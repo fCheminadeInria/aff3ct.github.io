@@ -1800,9 +1800,9 @@ async def startup():
     global dashboard
     await load_data()
     dashboard = init_dashboard()
+    dashboard.servable()
     
-    if IS_PYODIDE:
-        dashboard.servable()
+    if IS_PYODIDE: 
         await pn.io.pyodide.write_doc()
     
     
