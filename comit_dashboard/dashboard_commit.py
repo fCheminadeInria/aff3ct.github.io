@@ -397,6 +397,7 @@ def init_dashboard():
         accent="teal",
         theme_toggle=False,
     )
+    template.servable()
     return template
 
 ##################################### Niveau Global ####################################
@@ -583,7 +584,7 @@ class Research_config_filter(pn.viewable.Viewer):
                 height=400,
                 styles={'overflow-y': 'auto'}),
                 title="🔍 Filtres de recherche",
-                collapsed=True
+                collapsed=False
                 )
             
     def _get_current_filter(self):
@@ -1636,8 +1637,7 @@ print(ud.unidata_version)
 if IS_PANEL_CONVERT:
     # GitHub-Pages (pyodide-worker) → on charge et on sert
     load_data_sync()
-    dashboard = init_dashboard()
-    dashboard.servable()
+    init_dashboard()
 
 elif IS_PYODIDE:
     # JupyterLite ou autre environnement Pyodide → onload
