@@ -6,14 +6,6 @@ import panel as pn
 from datetime import datetime
 import argparse
 import re
-try:
-    from pyodide.http import open_url
-    from pyodide.http import pyfetch
-except ModuleNotFoundError:
-    # Utiliser un fallback avec urllib en environnement standard
-    from urllib.request import urlopen as open_url
-    pyfetch = None
-    
 import plotly.graph_objs as go
 import plotly.express as px
 import plotly.graph_objects as go
@@ -23,10 +15,400 @@ import unicodedata as ud
 import itertools
 from io import BytesIO
 import sys
-import asyncio
 import os
+import unicodedata as ud
+import urllib.request
+import json
+
+try:
+    import pyarrow.parquet as pq
+except ImportError:
+    pq = None
+
+# ------------------------------------------------------------------------------
+#  Variables d’environnement
+# ------------------------------------------------------------------------------
+IS_PYODIDE       = sys.platform == "emscripten"
+IS_PANEL_CONVERT = os.getenv("PANEL_CONVERT") == "1"
+
+# ------------------------------------------------------------------------------
+#  Chargement des données – SYNCHRONE
+# ------------------------------------------------------------------------------
+
+
+GITLAB_PACKAGE_URL = "https://gitlab.inria.fr/api/v4/projects/1420/packages/generic/gitlab-elk-export/latest/"
+
+def load_table(name: str, fmt: str = "parquet") -> pd.DataFrame:
+    url = f"{GITLAB_PACKAGE_URL}{name}.{fmt}"
+    try:
+        with urllib.request.urlopen(url, timeout=60) as response:
+            data = response.read()
+            buf = BytesIO(data)
+
+            if fmt == "parquet":
+                return pd.read_parquet(buf)
+            elif fmt == "json":
+                try:
+                    return pd.read_json(buf, orient="records", lines=True)
+                except ValueError:
+                    buf.seek(0)
+                    return pd.read_json(buf, orient="records")
+            else:
+                print(f"❌ Format non supporté : {fmt}")
+                return pd.DataFrame()
+    except Exception as e:
+        print(f"❌ Erreur lors du chargement de {name}.{fmt} : {e}")
+        return pd.DataFrame()
+
+def load_data_sync() -> None:
+    """Charge toutes les tables dans pn.state.cache['db'] (synchrone)."""
+    if IS_PYODIDE or IS_PANEL_CONVERT:
+        fmt='json'
+    else:    
+        fmt = 'parquet'
+    
+    
+    df_commands = load_table('command', fmt)
+    df_param = load_table('parameters', fmt)
+    df_tasks = load_table('tasks', fmt)
+    df_runs = load_table('runs', fmt)
+    df_git = load_table('git', fmt)
+    df_log = load_table('logs', fmt)
+
+    if df_commands.empty:
+        raise ValueError("Impossible de charger les données pour 'command'. Veuillez vérifier l'URL et les dépendances.")
+    df_commands.set_index('Command_id', inplace=True)
+
+    df_param.set_index('param_id', inplace=True)
+    df_tasks.set_index('RUN_id', inplace=True)
+    df_runs.set_index('RUN_id', inplace=True)
+    df_git.set_index('sha1', inplace=True)
+    df_log.set_index('Log_id', inplace=True)
+
+    # Alias
+    df_commands['Config_Alias'] = (
+        df_commands.index.astype(str) + " : " +
+        df_commands['Command_short'].astype(str) + "_" +
+        df_commands['sha1'].astype(str)
+    )
+
+    pn.state.cache['db'] = {
+        "commands": df_commands,
+        "tasks": df_tasks,
+        "runs": df_runs,
+        "git": df_git,
+        "param": df_param,
+        "logs": df_log,
+        "config_aliases": dict(zip(df_commands.index, df_commands['Config_Alias']))
+    }
+
+    apply_typing_code()
+    
+
+# ------------------------------------------------------------------------------
+#  Typage automatique (copié-collé de la version JSON)
+# ------------------------------------------------------------------------------
+def apply_typing_code():
+    ''' Applique le typage des données  (copier coller du résultat de generate_typing_code) ''' 
+    # Typage pour commands
+    commands = pn.state.cache['db']['commands']
+    commands['Command'] = commands['Command'].astype(str)
+    commands['sha1'] = commands['sha1'].astype(str)
+    commands['Command_short'] = commands['Command_short'].astype(str)
+    commands['param_id'] = commands['param_id'].astype(str)
+    commands['Config_Alias'] = commands['Config_Alias'].astype(str)
+    pn.state.cache['db']['commands'] = commands
+
+    # Typage pour tasks
+    tasks = pn.state.cache['db']['tasks']
+    pn.state.cache['db']['tasks'] = tasks
+
+    # Typage pour runs
+    runs = pn.state.cache['db']['runs']
+    runs['log_hash'] = runs['log_hash'].astype(str)
+    runs['Date_Execution'] = pd.to_datetime(runs['Date_Execution'], errors='coerce')
+    runs['Bit Error Rate (BER) and Frame Error Rate (FER).BE'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).BE'], errors='coerce').astype('Int64')
+    runs['Bit Error Rate (BER) and Frame Error Rate (FER).BER'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).BER'], errors='coerce')
+    runs['Bit Error Rate (BER) and Frame Error Rate (FER).FE'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).FE'], errors='coerce').astype('Int64')
+    runs['Bit Error Rate (BER) and Frame Error Rate (FER).FER'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).FER'], errors='coerce')
+    runs['Bit Error Rate (BER) and Frame Error Rate (FER).FRA'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).FRA'], errors='coerce').astype('Int64')
+    runs['Global throughputand elapsed time.SIM_THR(Mb/s)'] = pd.to_numeric(runs['Global throughputand elapsed time.SIM_THR(Mb/s)'], errors='coerce')
+    runs['Global throughputand elapsed time.elapse_time(ns)'] = pd.to_numeric(runs['Global throughputand elapsed time.elapse_time(ns)'], errors='coerce')
+    runs['Signal Noise Ratio(SNR).Eb/N0(dB)'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Eb/N0(dB)'], errors='coerce')
+    runs['Signal Noise Ratio(SNR).Es/N0(dB)'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Es/N0(dB)'], errors='coerce')
+    runs['Signal Noise Ratio(SNR).Sigma'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Sigma'], errors='coerce')
+    runs['source.type'] = runs['source.type'].astype(str)
+    runs['id'] = runs['id'].astype(str)
+    runs['url'] = runs['url'].astype(str)
+    runs['status'] = runs['status'].astype(str)
+    runs['job_id'] = runs['job_id'].astype(str)
+    runs['job_name'] = runs['job_name'].astype(str)
+    runs['Signal Noise Ratio(SNR).Event Probability'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Event Probability'], errors='coerce')
+    runs['Mutual Information.MI'] = pd.to_numeric(runs['Mutual Information.MI'], errors='coerce')
+    runs['Mutual Information.MI_max'] = pd.to_numeric(runs['Mutual Information.MI_max'], errors='coerce')
+    runs['Mutual Information.MI_min'] = pd.to_numeric(runs['Mutual Information.MI_min'], errors='coerce')
+    runs['Mutual Information.n_trials'] = pd.to_numeric(runs['Mutual Information.n_trials'], errors='coerce')
+    runs['Signal Noise Ratio(SNR).Received Optical'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Received Optical'], errors='coerce')
+    runs['Command_id'] = runs['Command_id'].astype(str)
+    pn.state.cache['db']['runs'] = runs
+
+    # Typage pour git
+    git = pn.state.cache['db']['git']
+    git['author'] = git['author'].astype(str)
+    git['email'] = git['email'].astype(str)
+    git['date'] = pd.to_datetime(git['date'], errors='coerce')
+    git['message'] = git['message'].astype(str)
+    git['insertions'] = pd.to_numeric(git['insertions'], errors='coerce').astype('Int64')
+    git['deletions'] = pd.to_numeric(git['deletions'], errors='coerce').astype('Int64')
+    git['files_changed'] = pd.to_numeric(git['files_changed'], errors='coerce').astype('Int64')
+    pn.state.cache['db']['git'] = git
+
+    # Typage pour param
+    param = pn.state.cache['db']['param']
+    param['Channel.Add users'] = param['Channel.Add users'].astype(str)
+    param['Channel.Complex'] = param['Channel.Complex'].astype(str)
+    param['Channel.Implementation'] = param['Channel.Implementation'].astype(str)
+    param['Channel.Type'] = param['Channel.Type'].astype(str)
+    param['Codec.Code rate'] = param['Codec.Code rate'].astype(str)
+    param['Codec.Codeword size (N_cw)'] = param['Codec.Codeword size (N_cw)'].astype(str)
+    param['Codec.Frame size (N)'] = param['Codec.Frame size (N)'].astype(str)
+    param['Codec.Info. bits (K)'] = param['Codec.Info. bits (K)'].astype(str)
+    param['Codec.Type'] = param['Codec.Type'].astype(str)
+    param['Decoder.Correction power (T)'] = param['Decoder.Correction power (T)'].astype(str)
+    param['Decoder.Galois field order (m)'] = param['Decoder.Galois field order (m)'].astype(str)
+    param['Decoder.Implementation'] = param['Decoder.Implementation'].astype(str)
+    param['Decoder.Systematic'] = param['Decoder.Systematic'].astype(str)
+    param['Decoder.Type (D)'] = param['Decoder.Type (D)'].astype(str)
+    param['Encoder.Systematic'] = param['Encoder.Systematic'].astype(str)
+    param['Encoder.Type'] = param['Encoder.Type'].astype(str)
+    param['Modem.Bits per symbol'] = param['Modem.Bits per symbol'].astype(str)
+    param['Modem.Implementation'] = param['Modem.Implementation'].astype(str)
+    param['Modem.Sigma square'] = param['Modem.Sigma square'].astype(str)
+    param['Modem.Type'] = param['Modem.Type'].astype(str)
+    param['Monitor.Compute mutual info'] = param['Monitor.Compute mutual info'].astype(str)
+    param['Monitor.Frame error count (e)'] = param['Monitor.Frame error count (e)'].astype(str)
+    param['Monitor.Lazy reduction'] = param['Monitor.Lazy reduction'].astype(str)
+    param['Simulation.Bad frames replay'] = param['Simulation.Bad frames replay'].astype(str)
+    param['Simulation.Bad frames tracking'] = param['Simulation.Bad frames tracking'].astype(str)
+    param['Simulation.Bit rate'] = param['Simulation.Bit rate'].astype(str)
+    param['Simulation.Code type (C)'] = param['Simulation.Code type (C)'].astype(str)
+    param['Simulation.Coded monitoring'] = param['Simulation.Coded monitoring'].astype(str)
+    param['Simulation.Coset approach (c)'] = param['Simulation.Coset approach (c)'].astype(str)
+    param['Simulation.Date (UTC)'] = param['Simulation.Date (UTC)'].astype(str)
+    param['Simulation.Debug mode'] = param['Simulation.Debug mode'].astype(str)
+    param['Simulation.Git version'] = param['Simulation.Git version'].astype(str)
+    param['Simulation.Inter frame level'] = param['Simulation.Inter frame level'].astype(str)
+    param['Simulation.Json export'] = param['Simulation.Json export'].astype(str)
+    param['Simulation.Multi-threading (t)'] = param['Simulation.Multi-threading (t)'].astype(str)
+    param['Simulation.Noise range'] = param['Simulation.Noise range'].astype(str)
+    param['Simulation.Noise type (E)'] = param['Simulation.Noise type (E)'].astype(str)
+    param['Simulation.Seed'] = param['Simulation.Seed'].astype(str)
+    param['Simulation.Statistics'] = param['Simulation.Statistics'].astype(str)
+    param['Simulation.Type'] = param['Simulation.Type'].astype(str)
+    param['Simulation.Type of bits'] = param['Simulation.Type of bits'].astype(str)
+    param['Simulation.Type of reals'] = param['Simulation.Type of reals'].astype(str)
+    param['Source.Implementation'] = param['Source.Implementation'].astype(str)
+    param['Source.Info. bits (K_info)'] = param['Source.Info. bits (K_info)'].astype(str)
+    param['Source.Type'] = param['Source.Type'].astype(str)
+    param['Terminal.Enabled'] = param['Terminal.Enabled'].astype(str)
+    param['Terminal.Frequency (ms)'] = param['Terminal.Frequency (ms)'].astype(str)
+    param['Terminal.Show Sigma'] = param['Terminal.Show Sigma'].astype(str)
+    param['Quantizer.Fixed-point config.'] = param['Quantizer.Fixed-point config.'].astype(str)
+    param['Quantizer.Implementation'] = param['Quantizer.Implementation'].astype(str)
+    param['Quantizer.Type'] = param['Quantizer.Type'].astype(str)
+    param['Simulation.Type of quant. reals'] = param['Simulation.Type of quant. reals'].astype(str)
+    param['Decoder.H matrix path'] = param['Decoder.H matrix path'].astype(str)
+    param['Decoder.H matrix reordering'] = param['Decoder.H matrix reordering'].astype(str)
+    param['Decoder.Num. of iterations (i)'] = param['Decoder.Num. of iterations (i)'].astype(str)
+    param['Decoder.Stop criterion (syndrome)'] = param['Decoder.Stop criterion (syndrome)'].astype(str)
+    param['Decoder.Stop criterion depth'] = param['Decoder.Stop criterion depth'].astype(str)
+    param['Decoder.Weighting factor'] = param['Decoder.Weighting factor'].astype(str)
+    param['Encoder.G build method'] = param['Encoder.G build method'].astype(str)
+    param['Encoder.H matrix path'] = param['Encoder.H matrix path'].astype(str)
+    param['Encoder.H matrix reordering'] = param['Encoder.H matrix reordering'].astype(str)
+    param['Decoder.Bernouilli probas'] = param['Decoder.Bernouilli probas'].astype(str)
+    param['CRC.Implementation'] = param['CRC.Implementation'].astype(str)
+    param['CRC.Polynomial (hexadecimal)'] = param['CRC.Polynomial (hexadecimal)'].astype(str)
+    param['CRC.Size (in bit)'] = param['CRC.Size (in bit)'].astype(str)
+    param['CRC.Type'] = param['CRC.Type'].astype(str)
+    param['Decoder.Adaptative mode'] = param['Decoder.Adaptative mode'].astype(str)
+    param['Decoder.Max num. of lists (L)'] = param['Decoder.Max num. of lists (L)'].astype(str)
+    param['Decoder.Polar node types'] = param['Decoder.Polar node types'].astype(str)
+    param['Decoder.SIMD strategy'] = param['Decoder.SIMD strategy'].astype(str)
+    param['Frozen bits generator.Noise'] = param['Frozen bits generator.Noise'].astype(str)
+    param['Frozen bits generator.Type'] = param['Frozen bits generator.Type'].astype(str)
+    param['Puncturer.Type'] = param['Puncturer.Type'].astype(str)
+    param['Decoder.Node type'] = param['Decoder.Node type'].astype(str)
+    param['Frozen bits generator MK.Noise'] = param['Frozen bits generator MK.Noise'].astype(str)
+    param['Frozen bits generator MK.Type'] = param['Frozen bits generator MK.Type'].astype(str)
+    param['Polar code.Kernel'] = param['Polar code.Kernel'].astype(str)
+    param['Decoder.Min type'] = param['Decoder.Min type'].astype(str)
+    param['Interleaver.Seed'] = param['Interleaver.Seed'].astype(str)
+    param['Interleaver.Type'] = param['Interleaver.Type'].astype(str)
+    param['Interleaver.Uniform'] = param['Interleaver.Uniform'].astype(str)
+    param['Encoder.Buffered'] = param['Encoder.Buffered'].astype(str)
+    param['Polar code.Kernels'] = param['Polar code.Kernels'].astype(str)
+    param['Polar code.Stages'] = param['Polar code.Stages'].astype(str)
+    param['Puncturer.Pattern'] = param['Puncturer.Pattern'].astype(str)
+    param['Codec.Symbols Codeword size'] = param['Codec.Symbols Codeword size'].astype(str)
+    param['Codec.Symbols Source size'] = param['Codec.Symbols Source size'].astype(str)
+    param['Decoder.Max type'] = param['Decoder.Max type'].astype(str)
+    param['Decoder.Polynomials'] = param['Decoder.Polynomials'].astype(str)
+    param['Decoder.Standard'] = param['Decoder.Standard'].astype(str)
+    param['Encoder.Polynomials'] = param['Encoder.Polynomials'].astype(str)
+    param['Encoder.Standard'] = param['Encoder.Standard'].astype(str)
+    param['Encoder.Tail length'] = param['Encoder.Tail length'].astype(str)
+    param['Decoder.Num. of lists (L)'] = param['Decoder.Num. of lists (L)'].astype(str)
+    param['Decoder.Normalize factor'] = param['Decoder.Normalize factor'].astype(str)
+    param['Source.Auto reset'] = param['Source.Auto reset'].astype(str)
+    param['Source.Fifo mode'] = param['Source.Fifo mode'].astype(str)
+    param['Source.Path'] = param['Source.Path'].astype(str)
+    param['Flip and check.Enabled'] = param['Flip and check.Enabled'].astype(str)
+    param['Scaling factor.Enabled'] = param['Scaling factor.Enabled'].astype(str)
+    param['Scaling factor.SF iterations'] = param['Scaling factor.SF iterations'].astype(str)
+    param['Scaling factor.Scaling factor (SF)'] = param['Scaling factor.Scaling factor (SF)'].astype(str)
+    param['Flip and check.FNC ite max'] = param['Flip and check.FNC ite max'].astype(str)
+    param['Flip and check.FNC ite min'] = param['Flip and check.FNC ite min'].astype(str)
+    param['Flip and check.FNC ite step'] = param['Flip and check.FNC ite step'].astype(str)
+    param['Flip and check.FNC q'] = param['Flip and check.FNC q'].astype(str)
+    param['Modem.Max type'] = param['Modem.Max type'].astype(str)
+    param['Frozen bits generator.Path'] = param['Frozen bits generator.Path'].astype(str)
+    param['Modem.Codebook'] = param['Modem.Codebook'].astype(str)
+    param['Modem.Number of iterations'] = param['Modem.Number of iterations'].astype(str)
+    param['Modem.Psi function'] = param['Modem.Psi function'].astype(str)
+    param['Interleaver.Number of columns'] = param['Interleaver.Number of columns'].astype(str)
+    param['Channel.Block fading policy'] = param['Channel.Block fading policy'].astype(str)
+    param['Modem.CPM L memory'] = param['Modem.CPM L memory'].astype(str)
+    param['Modem.CPM h index'] = param['Modem.CPM h index'].astype(str)
+    param['Modem.CPM mapping'] = param['Modem.CPM mapping'].astype(str)
+    param['Modem.CPM sampling factor'] = param['Modem.CPM sampling factor'].astype(str)
+    param['Modem.CPM standard'] = param['Modem.CPM standard'].astype(str)
+    param['Modem.CPM wave shape'] = param['Modem.CPM wave shape'].astype(str)
+    param['Decoder.Num. of flips'] = param['Decoder.Num. of flips'].astype(str)
+    param['Interleaver.Path'] = param['Interleaver.Path'].astype(str)
+    param['Simulation.Global iterations (I)'] = param['Simulation.Global iterations (I)'].astype(str)
+    param['Modem.ROP estimation'] = param['Modem.ROP estimation'].astype(str)
+    param['Simulation.PDF path'] = param['Simulation.PDF path'].astype(str)
+    pn.state.cache['db']['param'] = param
+
+    # Typage pour logs
+    logs = pn.state.cache['db']['logs']
+    logs['log'] = logs['log'].astype(str)
+    logs['hash'] = logs['hash'].astype(str)
+    logs['filename'] = logs['filename'].astype(str)
+    logs['Date_Execution'] = logs['Date_Execution'].astype(str)
+    pn.state.cache['db']['logs'] = logs
+
+def generate_typing_code(df, df_name="df"):
+    ''' Génère du code Python exécutable pour forcer le typage des colonnes dans pn.state.cache["db"][df_name] '''
+    lines = [
+        f"# Typage pour {df_name}",
+        f"{df_name} = pn.state.cache['db']['{df_name}']"
+    ]
+    
+    for col in df.columns:
+        dtype = df[col].dtype
+
+        if pd.api.types.is_integer_dtype(dtype):
+            lines.append(f"{df_name}['{col}'] = pd.to_numeric({df_name}['{col}'], errors='coerce').astype('Int64')")
+        elif pd.api.types.is_float_dtype(dtype):
+            lines.append(f"{df_name}['{col}'] = pd.to_numeric({df_name}['{col}'], errors='coerce')")
+        elif pd.api.types.is_bool_dtype(dtype):
+            lines.append(f"{df_name}['{col}'] = {df_name}['{col}'].astype(bool)")
+        elif pd.api.types.is_datetime64_any_dtype(dtype):
+            lines.append(f"{df_name}['{col}'] = pd.to_datetime({df_name}['{col}'], errors='coerce')")
+        else:
+            lines.append(f"{df_name}['{col}'] = {df_name}['{col}'].astype(str)")
+
+    # Réassigner dans le cache (non strictement nécessaire mais plus explicite)
+    lines.append(f"pn.state.cache['db']['{df_name}'] = {df_name}")
+
+    return "\n".join(lines)
+
+# ------------------------------------------------------------------------------
+#  Initialisation du dashboard
+# ------------------------------------------------------------------------------
+def init_dashboard():
+    load_data_sync()
+
+    db = pn.state.cache['db']
+
+    git_filter = GitFilterModel(df_git=db['git'])
+
+    merged_df = db['commands'].merge(
+        db['param'][['Simulation.Code type (C)']],
+        left_on='param_id', right_index=True, how='left'
+    )
+    merged_df.rename(columns={'Simulation.Code type (C)': 'code'}, inplace=True)
+
+    command_filter = CommandFilterModel(df_commands=merged_df, git_filter=git_filter)
+
+    panelCommit = PanelCommit(command_filter=command_filter, git_filter=git_filter)
+
+    lvl2_filter = Lvl2_Filter_Model(command_filter=command_filter)
+    config_panel = ConfigPanel(lv2_model=lvl2_filter)
+
+    mi_panel = pn.Column(
+        Mutual_information_Panels(lv2_model=lvl2_filter, noiseScale=noiseScale),
+        scroll=True, height=700
+    )
+
+    panelConfig = pn.Row(
+        pn.Column(
+            config_panel,
+            TableConfig(lv2_filter=lvl2_filter, meta=False),
+            pn.Tabs(
+                ('BER/FER', pn.bind(plot_performance_metrics_plotly,
+                                   lvl2_filter.param.value, noiseScale.param.value)),
+                ('Mutual information', mi_panel)
+            ),
+            sizing_mode="stretch_width"
+        )
+    )
+
+    unique_model = ConfigUniqueModel(lv2_model=lvl2_filter)
+
+    panel_par_config = pn.Column(
+        pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ✏️ Logs</h2></div>"),
+        LogViewer(unique_conf_model=unique_model),
+        sizing_mode="stretch_width"
+    )
+
+    config_count = pn.indicators.Number(
+        name="Configurations en base",
+        value=db['commands'].shape[0] if not db['commands'].empty else 0
+    )
+
+    panelData = pn.Column(config_count, sizing_mode="stretch_width")
+
+    dashboard = pn.Column(
+        pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ✏️ Niveau 1 : Evolution par commit </h2></div>"),
+        panelCommit,
+        pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ☎️ Niveau 2 : BER / FER </h2></div>"),
+        panelConfig,
+        pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ⚙️ Niveau 3 : Analyse à la commande</h2></div>"),
+        panel_par_config,
+    )
+
+    template = pn.template.FastListTemplate(
+        title="Commits Dashboard",
+        sidebar=[logo, noiseScale, pn.layout.Divider(), panelData],
+        main=[dashboard],
+        main_layout=None,
+        accent=ACCENT,
+        theme_toggle=False,
+    )
+    return template
+
+
+
+
 
 ##################################### Niveau Global ####################################
+
+IS_PYODIDE       = sys.platform == "emscripten"
+IS_PANEL_CONVERT = os.getenv("PANEL_CONVERT") == "1"
+
 
 # Initialiser Panel
 pn.extension(
@@ -1202,329 +1584,6 @@ class Tasks_Histogramme(pn.viewable.Viewer):
         return pn.pane.Plotly(fig, sizing_mode="stretch_width")
 
 
-###############################################################################################################################################################################################################################################################
-#####################################                                                                      Input                                                                                                      ####################################
-###############################################################################################################################################################################################################################################################
-
-###########################################
-## Chargement des données depuis Gitlab ###
-###########################################
-
-GITLAB_PACKAGE_URL = "https://gitlab.inria.fr/api/v4/projects/1420/packages/generic/gitlab-elk-export/latest/"
-
-async def load_table(name: str, fmt: str = "parquet") -> pd.DataFrame:
-    url = f"{GITLAB_PACKAGE_URL}{name}.{fmt}"
-
-    try:
-        if IS_PYODIDE :
-            response = await pyfetch(url)
-            data = await response.bytes()
-        elif IS_PANEL_CONVERT :
-            with open_url(url) as response:
-                data = response.read()
-        else:
-            import httpx
-            import pyarrow.parquet as pq
-
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url)
-                response.raise_for_status()
-                data = response.content
-
-        buf = BytesIO(data)
-
-        if fmt == "parquet":
-            table = pq.read_table(source=buf)
-            return table.to_pandas()
-        elif fmt == "json":
-            try:
-                return pd.read_json(buf, orient="records", lines=True)
-            except ValueError:
-                buf.seek(0)
-                return pd.read_json(buf, orient="records")
-        else:
-            print(f"❌ Format non supporté : {fmt}")
-            return pd.DataFrame()
-
-    except Exception as e:
-        print(f"❌ Erreur lors du chargement de {name}.{fmt} : {e}")
-        return pd.DataFrame()
-
-      
-async def load_data():
-    if IS_PYODIDE or IS_PANEL_CONVERT:
-        fmt='json'
-    else:    
-        fmt = 'parquet'
-    
-    df_commands = await load_table('command', fmt=fmt)
-    df_commands.set_index('Command_id', inplace=True)
-    
-
-    # df_meta = await load_table('meta', fmt=fmt)
-    # df_meta.set_index('meta_id', inplace=True)
-
-
-    df_param = await load_table('parameters', fmt=fmt)
-    df_param.set_index('param_id', inplace=True)
-
-    df_tasks = await load_table('tasks', fmt=fmt)
-    df_tasks.set_index('RUN_id', inplace=True)
-
-    df_runs = await load_table('runs', fmt=fmt)
-    df_runs.set_index('RUN_id', inplace=True)
-
-    df_git = await load_table('git', fmt=fmt)
-    df_git.set_index('sha1', inplace=True)
-    # df_git['date'] = pd.to_datetime(df_git['date'], utc=True)
-
-    df_log = await load_table('logs', fmt=fmt)
-    df_log.set_index('Log_id', inplace=True)
-
-    # Générer Config_Alias depuis config
-    df_commands['Config_Alias'] = df_commands.index + " : " + df_commands['Command_short'] + "_" + df_commands['sha1']
-    config_aliases = dict(zip(df_commands.index, df_commands['Config_Alias']))
-
-    pn.state.cache['db'] =  {
-        "commands": df_commands,
-        "tasks": df_tasks,
-        "runs": df_runs,
-        "git": df_git,
-        # "meta": df_meta,
-        "param": df_param,
-        "config_aliases": config_aliases,
-        "logs": df_log
-    }
-
-    # Afficher les types de données des DataFrames pour générer le typage des fichiers json depuis les parquets (utile pour le développement)
-    if fmt == 'parquet':
-        with open('output_typing_code.py.generate', 'w', encoding='utf-8') as f:
-            for name, df in pn.state.cache['db'].items():
-                if name != 'config_aliases':
-                    f.write(generate_typing_code(df, name))
-                    f.write('\n\n') 
-    else :
-        apply_typing_code()
-
-def generate_typing_code(df, df_name="df"):
-    ''' Génère du code Python exécutable pour forcer le typage des colonnes dans pn.state.cache["db"][df_name] '''
-    lines = [
-        f"# Typage pour {df_name}",
-        f"{df_name} = pn.state.cache['db']['{df_name}']"
-    ]
-    
-    for col in df.columns:
-        dtype = df[col].dtype
-
-        if pd.api.types.is_integer_dtype(dtype):
-            lines.append(f"{df_name}['{col}'] = pd.to_numeric({df_name}['{col}'], errors='coerce').astype('Int64')")
-        elif pd.api.types.is_float_dtype(dtype):
-            lines.append(f"{df_name}['{col}'] = pd.to_numeric({df_name}['{col}'], errors='coerce')")
-        elif pd.api.types.is_bool_dtype(dtype):
-            lines.append(f"{df_name}['{col}'] = {df_name}['{col}'].astype(bool)")
-        elif pd.api.types.is_datetime64_any_dtype(dtype):
-            lines.append(f"{df_name}['{col}'] = pd.to_datetime({df_name}['{col}'], errors='coerce')")
-        else:
-            lines.append(f"{df_name}['{col}'] = {df_name}['{col}'].astype(str)")
-
-    # Réassigner dans le cache (non strictement nécessaire mais plus explicite)
-    lines.append(f"pn.state.cache['db']['{df_name}'] = {df_name}")
-
-    return "\n".join(lines)
-
-    
-def apply_typing_code():
-    ''' Applique le typage des données  (copier coller du résultat de generate_typing_code) ''' 
-    # Typage pour commands
-    commands = pn.state.cache['db']['commands']
-    commands['Command'] = commands['Command'].astype(str)
-    commands['sha1'] = commands['sha1'].astype(str)
-    commands['Command_short'] = commands['Command_short'].astype(str)
-    commands['param_id'] = commands['param_id'].astype(str)
-    commands['Config_Alias'] = commands['Config_Alias'].astype(str)
-    pn.state.cache['db']['commands'] = commands
-
-    # Typage pour tasks
-    tasks = pn.state.cache['db']['tasks']
-    pn.state.cache['db']['tasks'] = tasks
-
-    # Typage pour runs
-    runs = pn.state.cache['db']['runs']
-    runs['log_hash'] = runs['log_hash'].astype(str)
-    runs['Date_Execution'] = pd.to_datetime(runs['Date_Execution'], errors='coerce')
-    runs['Bit Error Rate (BER) and Frame Error Rate (FER).BE'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).BE'], errors='coerce').astype('Int64')
-    runs['Bit Error Rate (BER) and Frame Error Rate (FER).BER'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).BER'], errors='coerce')
-    runs['Bit Error Rate (BER) and Frame Error Rate (FER).FE'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).FE'], errors='coerce').astype('Int64')
-    runs['Bit Error Rate (BER) and Frame Error Rate (FER).FER'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).FER'], errors='coerce')
-    runs['Bit Error Rate (BER) and Frame Error Rate (FER).FRA'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).FRA'], errors='coerce').astype('Int64')
-    runs['Global throughputand elapsed time.SIM_THR(Mb/s)'] = pd.to_numeric(runs['Global throughputand elapsed time.SIM_THR(Mb/s)'], errors='coerce')
-    runs['Global throughputand elapsed time.elapse_time(ns)'] = pd.to_numeric(runs['Global throughputand elapsed time.elapse_time(ns)'], errors='coerce')
-    runs['Signal Noise Ratio(SNR).Eb/N0(dB)'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Eb/N0(dB)'], errors='coerce')
-    runs['Signal Noise Ratio(SNR).Es/N0(dB)'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Es/N0(dB)'], errors='coerce')
-    runs['Signal Noise Ratio(SNR).Sigma'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Sigma'], errors='coerce')
-    runs['source.type'] = runs['source.type'].astype(str)
-    runs['id'] = runs['id'].astype(str)
-    runs['url'] = runs['url'].astype(str)
-    runs['status'] = runs['status'].astype(str)
-    runs['job_id'] = runs['job_id'].astype(str)
-    runs['job_name'] = runs['job_name'].astype(str)
-    runs['Signal Noise Ratio(SNR).Event Probability'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Event Probability'], errors='coerce')
-    runs['Mutual Information.MI'] = pd.to_numeric(runs['Mutual Information.MI'], errors='coerce')
-    runs['Mutual Information.MI_max'] = pd.to_numeric(runs['Mutual Information.MI_max'], errors='coerce')
-    runs['Mutual Information.MI_min'] = pd.to_numeric(runs['Mutual Information.MI_min'], errors='coerce')
-    runs['Mutual Information.n_trials'] = pd.to_numeric(runs['Mutual Information.n_trials'], errors='coerce')
-    runs['Signal Noise Ratio(SNR).Received Optical'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Received Optical'], errors='coerce')
-    runs['Command_id'] = runs['Command_id'].astype(str)
-    pn.state.cache['db']['runs'] = runs
-
-    # Typage pour git
-    git = pn.state.cache['db']['git']
-    git['author'] = git['author'].astype(str)
-    git['email'] = git['email'].astype(str)
-    git['date'] = pd.to_datetime(git['date'], errors='coerce')
-    git['message'] = git['message'].astype(str)
-    git['insertions'] = pd.to_numeric(git['insertions'], errors='coerce').astype('Int64')
-    git['deletions'] = pd.to_numeric(git['deletions'], errors='coerce').astype('Int64')
-    git['files_changed'] = pd.to_numeric(git['files_changed'], errors='coerce').astype('Int64')
-    pn.state.cache['db']['git'] = git
-
-    # Typage pour param
-    param = pn.state.cache['db']['param']
-    param['Channel.Add users'] = param['Channel.Add users'].astype(str)
-    param['Channel.Complex'] = param['Channel.Complex'].astype(str)
-    param['Channel.Implementation'] = param['Channel.Implementation'].astype(str)
-    param['Channel.Type'] = param['Channel.Type'].astype(str)
-    param['Codec.Code rate'] = param['Codec.Code rate'].astype(str)
-    param['Codec.Codeword size (N_cw)'] = param['Codec.Codeword size (N_cw)'].astype(str)
-    param['Codec.Frame size (N)'] = param['Codec.Frame size (N)'].astype(str)
-    param['Codec.Info. bits (K)'] = param['Codec.Info. bits (K)'].astype(str)
-    param['Codec.Type'] = param['Codec.Type'].astype(str)
-    param['Decoder.Correction power (T)'] = param['Decoder.Correction power (T)'].astype(str)
-    param['Decoder.Galois field order (m)'] = param['Decoder.Galois field order (m)'].astype(str)
-    param['Decoder.Implementation'] = param['Decoder.Implementation'].astype(str)
-    param['Decoder.Systematic'] = param['Decoder.Systematic'].astype(str)
-    param['Decoder.Type (D)'] = param['Decoder.Type (D)'].astype(str)
-    param['Encoder.Systematic'] = param['Encoder.Systematic'].astype(str)
-    param['Encoder.Type'] = param['Encoder.Type'].astype(str)
-    param['Modem.Bits per symbol'] = param['Modem.Bits per symbol'].astype(str)
-    param['Modem.Implementation'] = param['Modem.Implementation'].astype(str)
-    param['Modem.Sigma square'] = param['Modem.Sigma square'].astype(str)
-    param['Modem.Type'] = param['Modem.Type'].astype(str)
-    param['Monitor.Compute mutual info'] = param['Monitor.Compute mutual info'].astype(str)
-    param['Monitor.Frame error count (e)'] = param['Monitor.Frame error count (e)'].astype(str)
-    param['Monitor.Lazy reduction'] = param['Monitor.Lazy reduction'].astype(str)
-    param['Simulation.Bad frames replay'] = param['Simulation.Bad frames replay'].astype(str)
-    param['Simulation.Bad frames tracking'] = param['Simulation.Bad frames tracking'].astype(str)
-    param['Simulation.Bit rate'] = param['Simulation.Bit rate'].astype(str)
-    param['Simulation.Code type (C)'] = param['Simulation.Code type (C)'].astype(str)
-    param['Simulation.Coded monitoring'] = param['Simulation.Coded monitoring'].astype(str)
-    param['Simulation.Coset approach (c)'] = param['Simulation.Coset approach (c)'].astype(str)
-    param['Simulation.Date (UTC)'] = param['Simulation.Date (UTC)'].astype(str)
-    param['Simulation.Debug mode'] = param['Simulation.Debug mode'].astype(str)
-    param['Simulation.Git version'] = param['Simulation.Git version'].astype(str)
-    param['Simulation.Inter frame level'] = param['Simulation.Inter frame level'].astype(str)
-    param['Simulation.Json export'] = param['Simulation.Json export'].astype(str)
-    param['Simulation.Multi-threading (t)'] = param['Simulation.Multi-threading (t)'].astype(str)
-    param['Simulation.Noise range'] = param['Simulation.Noise range'].astype(str)
-    param['Simulation.Noise type (E)'] = param['Simulation.Noise type (E)'].astype(str)
-    param['Simulation.Seed'] = param['Simulation.Seed'].astype(str)
-    param['Simulation.Statistics'] = param['Simulation.Statistics'].astype(str)
-    param['Simulation.Type'] = param['Simulation.Type'].astype(str)
-    param['Simulation.Type of bits'] = param['Simulation.Type of bits'].astype(str)
-    param['Simulation.Type of reals'] = param['Simulation.Type of reals'].astype(str)
-    param['Source.Implementation'] = param['Source.Implementation'].astype(str)
-    param['Source.Info. bits (K_info)'] = param['Source.Info. bits (K_info)'].astype(str)
-    param['Source.Type'] = param['Source.Type'].astype(str)
-    param['Terminal.Enabled'] = param['Terminal.Enabled'].astype(str)
-    param['Terminal.Frequency (ms)'] = param['Terminal.Frequency (ms)'].astype(str)
-    param['Terminal.Show Sigma'] = param['Terminal.Show Sigma'].astype(str)
-    param['Quantizer.Fixed-point config.'] = param['Quantizer.Fixed-point config.'].astype(str)
-    param['Quantizer.Implementation'] = param['Quantizer.Implementation'].astype(str)
-    param['Quantizer.Type'] = param['Quantizer.Type'].astype(str)
-    param['Simulation.Type of quant. reals'] = param['Simulation.Type of quant. reals'].astype(str)
-    param['Decoder.H matrix path'] = param['Decoder.H matrix path'].astype(str)
-    param['Decoder.H matrix reordering'] = param['Decoder.H matrix reordering'].astype(str)
-    param['Decoder.Num. of iterations (i)'] = param['Decoder.Num. of iterations (i)'].astype(str)
-    param['Decoder.Stop criterion (syndrome)'] = param['Decoder.Stop criterion (syndrome)'].astype(str)
-    param['Decoder.Stop criterion depth'] = param['Decoder.Stop criterion depth'].astype(str)
-    param['Decoder.Weighting factor'] = param['Decoder.Weighting factor'].astype(str)
-    param['Encoder.G build method'] = param['Encoder.G build method'].astype(str)
-    param['Encoder.H matrix path'] = param['Encoder.H matrix path'].astype(str)
-    param['Encoder.H matrix reordering'] = param['Encoder.H matrix reordering'].astype(str)
-    param['Decoder.Bernouilli probas'] = param['Decoder.Bernouilli probas'].astype(str)
-    param['CRC.Implementation'] = param['CRC.Implementation'].astype(str)
-    param['CRC.Polynomial (hexadecimal)'] = param['CRC.Polynomial (hexadecimal)'].astype(str)
-    param['CRC.Size (in bit)'] = param['CRC.Size (in bit)'].astype(str)
-    param['CRC.Type'] = param['CRC.Type'].astype(str)
-    param['Decoder.Adaptative mode'] = param['Decoder.Adaptative mode'].astype(str)
-    param['Decoder.Max num. of lists (L)'] = param['Decoder.Max num. of lists (L)'].astype(str)
-    param['Decoder.Polar node types'] = param['Decoder.Polar node types'].astype(str)
-    param['Decoder.SIMD strategy'] = param['Decoder.SIMD strategy'].astype(str)
-    param['Frozen bits generator.Noise'] = param['Frozen bits generator.Noise'].astype(str)
-    param['Frozen bits generator.Type'] = param['Frozen bits generator.Type'].astype(str)
-    param['Puncturer.Type'] = param['Puncturer.Type'].astype(str)
-    param['Decoder.Node type'] = param['Decoder.Node type'].astype(str)
-    param['Frozen bits generator MK.Noise'] = param['Frozen bits generator MK.Noise'].astype(str)
-    param['Frozen bits generator MK.Type'] = param['Frozen bits generator MK.Type'].astype(str)
-    param['Polar code.Kernel'] = param['Polar code.Kernel'].astype(str)
-    param['Decoder.Min type'] = param['Decoder.Min type'].astype(str)
-    param['Interleaver.Seed'] = param['Interleaver.Seed'].astype(str)
-    param['Interleaver.Type'] = param['Interleaver.Type'].astype(str)
-    param['Interleaver.Uniform'] = param['Interleaver.Uniform'].astype(str)
-    param['Encoder.Buffered'] = param['Encoder.Buffered'].astype(str)
-    param['Polar code.Kernels'] = param['Polar code.Kernels'].astype(str)
-    param['Polar code.Stages'] = param['Polar code.Stages'].astype(str)
-    param['Puncturer.Pattern'] = param['Puncturer.Pattern'].astype(str)
-    param['Codec.Symbols Codeword size'] = param['Codec.Symbols Codeword size'].astype(str)
-    param['Codec.Symbols Source size'] = param['Codec.Symbols Source size'].astype(str)
-    param['Decoder.Max type'] = param['Decoder.Max type'].astype(str)
-    param['Decoder.Polynomials'] = param['Decoder.Polynomials'].astype(str)
-    param['Decoder.Standard'] = param['Decoder.Standard'].astype(str)
-    param['Encoder.Polynomials'] = param['Encoder.Polynomials'].astype(str)
-    param['Encoder.Standard'] = param['Encoder.Standard'].astype(str)
-    param['Encoder.Tail length'] = param['Encoder.Tail length'].astype(str)
-    param['Decoder.Num. of lists (L)'] = param['Decoder.Num. of lists (L)'].astype(str)
-    param['Decoder.Normalize factor'] = param['Decoder.Normalize factor'].astype(str)
-    param['Source.Auto reset'] = param['Source.Auto reset'].astype(str)
-    param['Source.Fifo mode'] = param['Source.Fifo mode'].astype(str)
-    param['Source.Path'] = param['Source.Path'].astype(str)
-    param['Flip and check.Enabled'] = param['Flip and check.Enabled'].astype(str)
-    param['Scaling factor.Enabled'] = param['Scaling factor.Enabled'].astype(str)
-    param['Scaling factor.SF iterations'] = param['Scaling factor.SF iterations'].astype(str)
-    param['Scaling factor.Scaling factor (SF)'] = param['Scaling factor.Scaling factor (SF)'].astype(str)
-    param['Flip and check.FNC ite max'] = param['Flip and check.FNC ite max'].astype(str)
-    param['Flip and check.FNC ite min'] = param['Flip and check.FNC ite min'].astype(str)
-    param['Flip and check.FNC ite step'] = param['Flip and check.FNC ite step'].astype(str)
-    param['Flip and check.FNC q'] = param['Flip and check.FNC q'].astype(str)
-    param['Modem.Max type'] = param['Modem.Max type'].astype(str)
-    param['Frozen bits generator.Path'] = param['Frozen bits generator.Path'].astype(str)
-    param['Modem.Codebook'] = param['Modem.Codebook'].astype(str)
-    param['Modem.Number of iterations'] = param['Modem.Number of iterations'].astype(str)
-    param['Modem.Psi function'] = param['Modem.Psi function'].astype(str)
-    param['Interleaver.Number of columns'] = param['Interleaver.Number of columns'].astype(str)
-    param['Channel.Block fading policy'] = param['Channel.Block fading policy'].astype(str)
-    param['Modem.CPM L memory'] = param['Modem.CPM L memory'].astype(str)
-    param['Modem.CPM h index'] = param['Modem.CPM h index'].astype(str)
-    param['Modem.CPM mapping'] = param['Modem.CPM mapping'].astype(str)
-    param['Modem.CPM sampling factor'] = param['Modem.CPM sampling factor'].astype(str)
-    param['Modem.CPM standard'] = param['Modem.CPM standard'].astype(str)
-    param['Modem.CPM wave shape'] = param['Modem.CPM wave shape'].astype(str)
-    param['Decoder.Num. of flips'] = param['Decoder.Num. of flips'].astype(str)
-    param['Interleaver.Path'] = param['Interleaver.Path'].astype(str)
-    param['Simulation.Global iterations (I)'] = param['Simulation.Global iterations (I)'].astype(str)
-    param['Modem.ROP estimation'] = param['Modem.ROP estimation'].astype(str)
-    param['Simulation.PDF path'] = param['Simulation.PDF path'].astype(str)
-    pn.state.cache['db']['param'] = param
-
-    # Typage pour logs
-    logs = pn.state.cache['db']['logs']
-    logs['log'] = logs['log'].astype(str)
-    logs['hash'] = logs['hash'].astype(str)
-    logs['filename'] = logs['filename'].astype(str)
-    logs['Date_Execution'] = logs['Date_Execution'].astype(str)
-    pn.state.cache['db']['logs'] = logs
-
-
 
 
 
@@ -1663,127 +1722,6 @@ class PanelCommit(pn.viewable.Viewer):
 
 
 
-def init_dashboard():
-    db = pn.state.cache['db']
-
-    git_filter = GitFilterModel(df_git=db['git'])
-
-    #ajout du code aux commandes
-    merged_df = db['commands'].merge(db['param'], #[['Simulation.Code type (C)']], 
-                                    left_on='param_id',
-                                    right_index=True,
-                                    how='left')
-    merged_df.rename(columns={'Simulation.Code type (C)': 'code'}, inplace=True)
-
-    command_filter = CommandFilterModel(df_commands=merged_df, git_filter=git_filter)
-
-    panelCommit = PanelCommit(command_filter=command_filter, git_filter=git_filter)
-
-    ##################################### Config ####################################
-
-    lvl2_filter = Lvl2_Filter_Model(command_filter=command_filter)
-    config_panel = ConfigPanel(lv2_model=lvl2_filter)
-
-    mi_panel = pn.Column(
-        Mutual_information_Panels(
-            lv2_model = lvl2_filter,
-            noiseScale =noiseScale
-        ),
-        scroll=True, height=700
-    )
-
-    # panel des configs
-    panelConfig = pn.Row(
-        pn.Column(
-            config_panel,
-            TableConfig(lv2_filter=lvl2_filter, meta=False),
-            pn.Tabs(
-                ('ılıılıılıılıılıılı BER/FER', pn.bind(plot_performance_metrics_plotly, lvl2_filter.param.value, noiseScale.param.value)),
-                ('⫘⫘⫘ Mutual information', mi_panel)
-            ),
-            sizing_mode="stretch_width"
-        )
-    )
-
-    ##################################### Performance par niveau de SNR ####################################
-
-    unique_model = ConfigUniqueModel(lv2_model=lvl2_filter)
-
-    # # Histogramme des temps des jobs
-    # task_Time_Histogramme = Tasks_Histogramme(
-    #     multi_choice_widget = config_selector,
-    #     df = db['tasks'],
-    #     noiseScale = noiseScale
-    # ) 
-
-    # plot_debit = Panel_graph_envelope(
-    #     multi_choice_widget = config_selector,
-    #     df = db['tasks'],
-    #     lab ="Measured throughput Average", 
-    #     labmin="Measured throughput Mininmum", 
-    #     labmax="Measured throughputMaximum", 
-    #     lab_group='Task',
-    #     Ytitle = "Débit",
-    #     noiseScale = noiseScale
-    # )
-
-    # plot_latence = Panel_graph_envelope(
-    #     multi_choice_widget = config_selector,
-    #     df = db['tasks'],
-    #     lab ="Measured latency Average", 
-    #     labmin="Measured latency Mininmum", 
-    #     labmax="Measured latency Maximum", 
-    #     lab_group='Task',
-    #     Ytitle = "Latence",
-    #     noiseScale = noiseScale
-    #)    
-
-    panel_par_config = pn.Column(
-        pn.pane.HTML("<div style='font-size: 20px;background-color: #e0e0e0; padding: 5px;line-height : 0px;'><h2> ✏️ Logs</h2></div>"),
-        LogViewer(unique_conf_model=unique_model),
-        #TableConfig(lv2_filter=lvl2_filter, meta=True),
-        # task_Time_Histogramme,
-        # plot_latence,
-        # plot_debit,
-        sizing_mode="stretch_width"
-    )
-
-    ##################################### Panel Données ####################################
-
-    # Widgets d'affichage des informations
-    config_count = pn.indicators.Number(name="Configurations en base", value=db['commands'].shape[0] if not db['commands'].empty else 0)
-
-    #panel de la partie data
-    panelData = pn.Column(config_count,
-                        sizing_mode="stretch_width")
-
-    # Layout du tableau de bord avec tout dans une colonne et des arrières-plans différents
-
-    dashboard = pn.Column(
-        
-        pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ✏️ Niveau 1 : Evolution par commit </h2></div>"),
-        panelCommit,
-        pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ☎️ Niveau 2 : BER / FER </h2></div>"),
-        panelConfig,
-        pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ⚙️ Niveau 3 : Analyse à la commande</h2></div>"),
-        panel_par_config,
-        )
-
-    paramSite = noiseScale
-    
-    dashboard= pn.template.FastListTemplate(
-        title="Commits Dashboard",
-        sidebar=[logo, paramSite,  pn.layout.Divider(), panelData],
-        main=[dashboard],
-        main_layout=None,
-        accent=ACCENT,
-        theme_toggle=False,
-    )
-    
-    return dashboard
-    # Lancer le tableau de bord
-
-
 ################################
 ## Démarage selon le contexte ##
 ################################
@@ -1791,20 +1729,18 @@ def init_dashboard():
 # Variables globales
 dashboard = None
 
-# Détection de l'environnement AVANT les définitions de fonctions
-IS_PYODIDE = sys.platform == "emscripten"
-IS_PANEL_CONVERT = os.getenv("PANEL_CONVERT") == "1"
-
 async def startup():
     """Version asynchrone pour Pyodide"""
     global dashboard
     await load_data()
     dashboard = init_dashboard()
-    dashboard.servable()
+    
     print("📦 Dashboard marqué comme servable")
     if IS_PYODIDE: 
+        dashboard.servable()
         await pn.io.pyodide.write_doc()
-    
+    elif IS_PANEL_CONVERT:
+        dashboard.servable()
     
     return dashboard
 
@@ -1829,26 +1765,24 @@ def convert_startup():
     
     return dashboard
 
-def launch():
-    """Point d'entrée principal"""
-    global dashboard
-    
-    if IS_PYODIDE:
-        # Pour Pyodide, utiliser onload
-        print("Mode Pyodide détecté")
-        pn.state.onload(startup)
-        
-    elif IS_PANEL_CONVERT:
-        # Pour panel convert
-        print("Mode Panel Convert détecté")
-        convert_startup()
-        
-    else:
-        # Mode développement local
-        print("Mode développement local")
-        asyncio.run(startup())
-        pn.serve(dashboard, show=True, port=35489)
 
-# Point d'entrée
+# ------------------------------------------------------------------
+# Point d’entrée unique
+# ------------------------------------------------------------------
 print(ud.unidata_version)
-launch()
+
+if IS_PANEL_CONVERT:
+    # GitHub-Pages (pyodide-worker) → on charge et on sert
+    load_data_sync()
+    dashboard = init_dashboard()
+    dashboard.servable()
+
+elif IS_PYODIDE:
+    # JupyterLite ou autre environnement Pyodide → onload
+    pn.state.onload(lambda: (load_data_sync(), init_dashboard().servable()))
+
+else:
+    # Mode local « python dashboard_commit.py »
+    load_data_sync()
+    dashboard = init_dashboard()
+    dashboard.show(port=35489)
