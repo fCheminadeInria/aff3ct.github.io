@@ -35,10 +35,8 @@ IS_PANEL_CONVERT = os.getenv("PANEL_CONVERT") == "1"
 #  Chargement des données – SYNCHRONE
 # ------------------------------------------------------------------------------
 
-
-GITLAB_PACKAGE_URL = "https://gitlab.inria.fr/api/v4/projects/1420/packages/generic/gitlab-elk-export/latest/"
-
 def load_table(name: str, fmt: str = "parquet") -> pd.DataFrame:
+    GITLAB_PACKAGE_URL = "https://gitlab.inria.fr/api/v4/projects/1420/packages/generic/gitlab-elk-export/latest/"
     url = f"{GITLAB_PACKAGE_URL}{name}.{fmt}"
     try:
         with urllib.request.urlopen(url, timeout=60) as response:
@@ -66,7 +64,6 @@ def load_data_sync() -> None:
         fmt='json'
     else:    
         fmt = 'parquet'
-    
     
     df_commands = load_table('command', fmt)
     df_param = load_table('parameters', fmt)
@@ -104,10 +101,10 @@ def load_data_sync() -> None:
 
     apply_typing_code()
     
-
 # ------------------------------------------------------------------------------
 #  Typage automatique (copié-collé de la version JSON)
 # ------------------------------------------------------------------------------
+
 def apply_typing_code():
     ''' Applique le typage des données  (copier coller du résultat de generate_typing_code) ''' 
     # Typage pour commands
@@ -389,26 +386,23 @@ def init_dashboard():
         pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ⚙️ Niveau 3 : Analyse à la commande</h2></div>"),
         panel_par_config,
     )
-
+    
+    logo = pn.pane.Image("https://raw.githubusercontent.com/fCheminadeInria/aff3ct.github.io/refs/heads/master/comit_dashboard/image/93988066-1f77-4b42-941f-1d5ef89ddca2.webp")
+    
     template = pn.template.FastListTemplate(
         title="Commits Dashboard",
         sidebar=[logo, noiseScale, pn.layout.Divider(), panelData],
         main=[dashboard],
         main_layout=None,
-        accent=ACCENT,
+        accent="teal",
         theme_toggle=False,
     )
     return template
-
-
-
-
 
 ##################################### Niveau Global ####################################
 
 IS_PYODIDE       = sys.platform == "emscripten"
 IS_PANEL_CONVERT = os.getenv("PANEL_CONVERT") == "1"
-
 
 # Initialiser Panel
 pn.extension(
@@ -422,42 +416,6 @@ noise_label = {
     'Es/N0': 'Signal Noise Ratio(SNR).Es/N0(dB)',
     'Sigma': 'Signal Noise Ratio(SNR).Sigma',
 }
-
-pn.config.raw_css.append("""
-.align-right {
-    margin-left: auto;
-    display: flex;
-    justify-content: flex-end;
-}
-""")
-
-pn.config.raw_css = [
-    """
-    .tittle_indicator-text {
-        font-size: 20px;
-        font-weight: normal;
-        color: #333333;
-    }
-    .indicator-text {
-        font-size: 64px;
-        font-weight: normal;
-        color: #333333;
-    }
-    """
-]
-
-ACCENT = "teal"
-
-styles = {
-    "box-shadow": "rgba(50, 50, 93, 0.25) 0px 6px 12px -2px, rgba(0, 0, 0, 0.3) 0px 3px 7px -3px",
-    "border-radius": "4px",
-    "padding": "10px",
-  }
-
-#logo = pn.pane.Image("/home/fchemina/aff3ct.github.io/comit_dashboard/image/2ada77c3-f7d7-40ae-8769-b77cc3791e84.webp")
-#logo = pn.pane.Image("https://raw.githubusercontent.com/fCheminadeInria/aff3ct.github.io/refs/heads/master/comit_dashboard/image/2ada77c3-f7d7-40ae-8769-b77cc3791e84.webp")
-logo = pn.pane.Image("https://raw.githubusercontent.com/fCheminadeInria/aff3ct.github.io/refs/heads/master/comit_dashboard/image/93988066-1f77-4b42-941f-1d5ef89ddca2.webp")
-
 
 ######################
 ## Echelle de bruit ##
@@ -490,7 +448,6 @@ class NoiseScale (pn.viewable.Viewer) :
         """
         self.value = self.noise_label[self.radio_group.value]
 
-
 ##################################### Modèle de données ####################################
 
 ##################################
@@ -513,7 +470,6 @@ class GitFilterModel(param.Parameterized):
             min_date = self.df_git['date'].min()
             max_date = self.df_git['date'].max()
             self.date_range = (min_date, max_date)
-
 
     def get_filtered_df(self):
         df = self.df_git.copy()
@@ -546,7 +502,6 @@ class CommandFilterModel(param.Parameterized):
     def _trigger(self):
         self.param.trigger('filtered')  
 
-
     def get_filtered_df(self):
         sha1_valids = self.git_filter.get_sha1_valids()
         df_filtered = self.df_commands[self.df_commands['sha1'].isin(sha1_valids)]
@@ -557,7 +512,6 @@ class CommandFilterModel(param.Parameterized):
             if values:
                 df_filtered = df_filtered[df_filtered[col].isin(values)]
         return df_filtered
-
 
 class Research_config_filter(pn.viewable.Viewer):
     command_filter = param.ClassSelector(class_=CommandFilterModel)
@@ -604,7 +558,6 @@ class Research_config_filter(pn.viewable.Viewer):
 
     def _config_filter_to_markdown(self) -> str:
         parts = []
-
         for col_container in self.accordion_families.objects:
             for widget in col_container.objects:
                 all_options = widget.options
@@ -669,14 +622,13 @@ class Research_config_filter(pn.viewable.Viewer):
     def _update_filterconfig(self, event):
         """Met à jour le filtre du modèle lors d’un changement utilisateur."""
         
-            # Empêche la suppression complète des options
+        # Empêche la suppression complète des options
         if len(event.new) < 1:
             event.obj.value = event.old
             return
 
         self.command_filter.config_filter = {**self.command_filter.config_filter,    event.obj.name: event.new}
         self._config_filter_to_markdown()
-
 
 ################################################
 ## Gestion des données niveau 2 avec filtrage ##
@@ -695,7 +647,6 @@ class Lvl2_Filter_Model(param.Parameterized):
         self.command_filter.param.watch(self._update_from_lvl1, 'filtered')
         self.param.watch(self._update_df, 'value')
         
-    
     def _update_from_lvl1(self, *events):
         df_filtered = self.command_filter.get_filtered_df()
         self.value = [v for v in self.value if v in df_filtered.index]
@@ -713,7 +664,6 @@ class Lvl2_Filter_Model(param.Parameterized):
     def reset(self):
         self.value = []
 
-
 ##################################################
 ## Gestion des données niveau 3 : config unique ##
 ##################################################
@@ -723,7 +673,6 @@ class ConfigUniqueModel(param.Parameterized):
     value = param.Selector(default=None, objects=[])
     date = param.Selector(default=None, objects=[])
     options = param.Selector(default=None, objects=[])
-
 
     @property
     def _df_configs_from_lvl2(self):
@@ -806,7 +755,6 @@ class ConfigUniqueModel(param.Parameterized):
         if id is not None:
             self.value = id
 
-    
     @param.depends('lv2_model.df', watch=True)
     def _on_lvl2_df_change(self):
         opts = self._df_configs_from_lvl2.index.tolist()
@@ -817,7 +765,6 @@ class ConfigUniqueModel(param.Parameterized):
 
 
 ##################################### Niveau 1 : Git et perf global ####################################
-
 
 #################################
 ## Component pour le Panel Git ##
@@ -1133,7 +1080,6 @@ class TableConfig(pn.viewable.Viewer):
             df_filtered = self.lv2_filter.df[['meta_id']] .merge(db['meta'] , left_on='meta_id',  right_index=True).drop(columns=['meta_id'])
         else :
             df_filtered = self.lv2_filter.df[['param_id']].merge(db['param'], left_on='param_id', right_index=True).drop(columns=['param_id'])
-        
         return df_filtered
 
 class Panel_graph_envelope(pn.viewable.Viewer):
@@ -1189,7 +1135,6 @@ class Panel_graph_envelope(pn.viewable.Viewer):
             show_envelope = False
         
         color_cycle = itertools.cycle(px.colors.qualitative.Plotly)
-
         fig = go.Figure()
 
         # Ajouter une trace pour chaque configuration et tâche
@@ -1204,10 +1149,8 @@ class Panel_graph_envelope(pn.viewable.Viewer):
                     task_data = config_data[config_data[self.lab_group] == t]
                     snr = task_data[noiseKey]
                     y_values = task_data[self.lab]         
-                    
                     color = next(color_cycle)
 
-                    
                     if show_envelope :
                         y_values_min = task_data[self.labmin]  
                         y_values_max = task_data[self.labmax]   
@@ -1227,8 +1170,7 @@ class Panel_graph_envelope(pn.viewable.Viewer):
                             marker=dict(symbol='x', size=6),
                             name=f"min/max - {alias} - {t}"  
                         ))
-
-                    
+   
                     fig.add_trace(go.Scatter(
                         x=snr, y=y_values,
                         mode='lines+markers',
@@ -1236,9 +1178,7 @@ class Panel_graph_envelope(pn.viewable.Viewer):
                         name=f"{self.lab} - {alias} - {t}"  
                     ))
             else :
-                
                 color = next(color_cycle)
-
                 snr = config_data[noiseKey]
                 y_values = config_data[self.lab]         
                 
@@ -1261,7 +1201,6 @@ class Panel_graph_envelope(pn.viewable.Viewer):
                         marker=dict(symbol='x', size=6),
                         name=f"min/max - {config}"  
                     ))
-
                 
                 fig.add_trace(go.Scatter(
                     x=snr, y=y_values,
@@ -1308,7 +1247,6 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
         
         self.colors = itertools.cycle(px.colors.qualitative.Plotly)
         
-        
         df =self.lv2_model.df_runs_filtred
         cols = ["Mutual Information.MI", "Mutual Information.MI_min", "Mutual Information.MI_max", "Mutual Information.n_trials"]
         df = df [ df[cols].notnull().any(axis=1) ]
@@ -1335,7 +1273,6 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
             pn.Row(self.ListBouton, self.mutual_information_ntrial)
         )
     
- 
     def _plottrial(self, index, noiseKey):
         ''' graphe de Nombre d'essais'''
         df_filtred = self.lv2_model.df_runs_filtred
@@ -1406,9 +1343,9 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
 
 ##################################### Niveau 3 : Commande ####################################
 
-###################################################
-## Gestion des données niveau 3 sélection unique ##
-###################################################
+# ------------------------------------------------------------------
+# Gestion des données niveau 3 sélection unique
+# ------------------------------------------------------------------
 
 class ConfigUniqueSelector(pn.viewable.Viewer):
     model = param.ClassSelector(class_=ConfigUniqueModel)
@@ -1453,10 +1390,9 @@ class ConfigUniqueSelector(pn.viewable.Viewer):
             self.selector
         )
 
-
-####################################
-## Affichage des journeaux d'exec ##
-####################################
+# ------------------------------------------------------------------
+# Affichage des journeaux d'exec
+# ------------------------------------------------------------------
 
 class LogViewer(pn.viewable.Viewer):
     unique_conf_model = param.ClassSelector(default=None, class_=ConfigUniqueModel)
@@ -1493,9 +1429,10 @@ class LogViewer(pn.viewable.Viewer):
             self.output_pane,
             sizing_mode="stretch_width")
 
-######################
-## Graphe de tâches ##
-######################
+
+# ------------------------------------------------------------------
+# Graphe de tâches
+# ------------------------------------------------------------------
 
 class Tasks_Histogramme(pn.viewable.Viewer):
     # Paramètres configurables
@@ -1543,8 +1480,6 @@ class Tasks_Histogramme(pn.viewable.Viewer):
         else :
             y_label = ('Perc','Durée (%)')
         
-        
-        
         # Pivot des données pour que chaque combinaison Config_Hash + Signal Noise Ratio(SNR).Eb/N0(dB) ait des colonnes pour les temps des tâches
         pivot_df = df_filtred.pivot_table(
             values=y_label[0], 
@@ -1583,11 +1518,6 @@ class Tasks_Histogramme(pn.viewable.Viewer):
         )
         return pn.pane.Plotly(fig, sizing_mode="stretch_width")
 
-
-
-
-
-
 # Performance par niveau de bruit pour les configurations sélectionnées
 def plot_performance_metrics_plotly(configs, noiseScale):
     # Si aucune configuration n'est sélectionnée
@@ -1599,7 +1529,6 @@ def plot_performance_metrics_plotly(configs, noiseScale):
         return pn.pane.Markdown("Pas de données de performance disponibles pour les configurations sélectionnées.")
     
     filtered_df_runs = filtered_df_runs.sort_values(by=noiseScale, ascending=True)
-    
     
     fig = go.Figure()
     
@@ -1655,40 +1584,9 @@ def plot_performance_metrics_plotly(configs, noiseScale):
     
     return pn.pane.Plotly(fig, sizing_mode="stretch_width")
 
-
-
-
-
-# Configurer argparse pour gérer les arguments en ligne de commande
-def parse_arguments():
-    parser = argparse.ArgumentParser(description="Tableau de bord des commits.")
-    parser.add_argument('-l', '--local', action="store_true", help="Local affiche le tableau de bord dans le navigateur, son absence permet son export.")  # on/off flag
-    return parser.parse_args()
-
- # Utiliser des valeurs par défaut dans le cas d'un export qui ne supporte pas argparse
-class DefaultArgs:
-    local = False
-args = DefaultArgs()
-if __name__ == "__main__":
-    args = parse_arguments()  # Appel unique de argparse ici
-
-#######################
-## Paramêtre du site ##
-#######################
-
-
-noiseScale = NoiseScale(noise_label= noise_label)
-
-###############################################################################################################################################################################################################################################################
-#####################################                                                                      Assemblage                                                                                                      ####################################
-###############################################################################################################################################################################################################################################################
-
-
-
-############################
-## Assemblage du panel git ##
-############################
-
+# ------------------------------------------------------------------
+# Assemblage du panel git
+# ------------------------------------------------------------------
 class PanelCommit(pn.viewable.Viewer):
     
     command_filter = param.ClassSelector(default=None, class_=CommandFilterModel, doc="Filtre de commandes")
@@ -1720,55 +1618,19 @@ class PanelCommit(pn.viewable.Viewer):
     def update_command_table(self, event=None):
         self.command_table.value = self.command_filter.get_filtered_df()
 
+# ------------------------------------------------------------------
+# Paramêtre du site
+# ------------------------------------------------------------------
 
-
-################################
-## Démarage selon le contexte ##
-################################
-
-# Variables globales
-dashboard = None
-
-async def startup():
-    """Version asynchrone pour Pyodide"""
-    global dashboard
-    await load_data()
-    dashboard = init_dashboard()
-    
-    print("📦 Dashboard marqué comme servable")
-    if IS_PYODIDE: 
-        dashboard.servable()
-        await pn.io.pyodide.write_doc()
-    elif IS_PANEL_CONVERT:
-        dashboard.servable()
-    
-    return dashboard
-
-def convert_startup():
-    """Version synchrone pour Panel Convert"""
-    global dashboard
-    
-    # Créer une nouvelle boucle d'événements si nécessaire
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    # Exécuter le chargement des données
-    loop.run_until_complete(load_data())
-    dashboard = init_dashboard()
-    dashboard.servable()
-    
-    return dashboard
-
+noiseScale = NoiseScale(noise_label= noise_label)
 
 # ------------------------------------------------------------------
 # Point d’entrée unique
 # ------------------------------------------------------------------
+
+# Variables globales
+dashboard = None
+
 print(ud.unidata_version)
 
 if IS_PANEL_CONVERT:
