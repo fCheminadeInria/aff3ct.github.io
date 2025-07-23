@@ -1642,19 +1642,20 @@ noiseScale = NoiseScale(noise_label= noise_label)
 # Point d’entrée unique
 # ------------------------------------------------------------------
 
-# Variables globales
-dashboard = None
 
-print(ud.unidata_version)
+def main():
+    print(ud.unidata_version)
+    load_data_sync()
+    template = init_dashboard()
+    template.servable()
 
 if IS_PANEL_CONVERT:
     # GitHub-Pages (pyodide-worker) → on charge et on sert
-    load_data_sync()
-    init_dashboard().servable()
+    main()
 
 elif IS_PYODIDE:
     # JupyterLite ou autre environnement Pyodide → onload
-    pn.state.onload(lambda: (load_data_sync(), init_dashboard().servable()))
+    pn.state.onload(lambda: main())
 
 else:
     # Mode local « python dashboard_commit.py »
