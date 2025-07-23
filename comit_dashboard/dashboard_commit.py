@@ -1240,7 +1240,6 @@ class Panel_graph_envelope(pn.viewable.Viewer):
 class Mutual_information_Panels (pn.viewable.Viewer) :
     # Paramètres configurables
     lv2_model = param.ClassSelector(default=None, class_=Lvl2_Filter_Model)
-    index_selecter = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
     noiseScale = param.ClassSelector(default=None, class_=pn.viewable.Viewer,doc="Choix de l'échelle de bruit par passage du label de la colonne")
 
     def __init__(self, **params):
