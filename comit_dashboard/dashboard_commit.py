@@ -1660,6 +1660,8 @@ noiseScale = NoiseScale(noise_label= noise_label)
 def main():
     print(ud.unidata_version)
     load_data_sync()
+    for k, v in pn.state.cache['db'].items():
+        print(f"{k:8s} : {len(v):6d} lignes")
     template = init_dashboard()
     template.servable()
 
@@ -1674,5 +1676,7 @@ elif IS_PYODIDE:
 else:
     # Mode local « python dashboard_commit.py »
     load_data_sync()
+    for k, v in pn.state.cache['db'].items():
+        print(f"{k:8s} : {len(v):6d} lignes")
     dashboard = init_dashboard()
     dashboard.show(port=35489)
