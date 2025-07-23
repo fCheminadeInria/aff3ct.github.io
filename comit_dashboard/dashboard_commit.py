@@ -452,6 +452,7 @@ class NoiseScale (pn.viewable.Viewer) :
         self.radio_group.param.watch(self._update_value, "value")
 
     def __panel__(self):
+        print(f"🧩 __panel__ appelé pour {self.__class__.__name__}")
         return pn.Column(
             pn.pane.Markdown(f"**{self.radio_group.name} :** "),
             pn.Row(self.radio_group, css_classes=["align-right"],sizing_mode="stretch_width"),
@@ -584,6 +585,7 @@ class Research_config_filter(pn.viewable.Viewer):
         self.filtre_actif.object =  "\n\n".join(parts) if parts else "_Aucun filtre désactivé_"
         
     def __panel__(self):
+        print(f"🧩 __panel__ appelé pour {self.__class__.__name__}")
         
         return pn.Card(
             pn.Column(
@@ -811,6 +813,7 @@ class DateRangeFilter(pn.viewable.Viewer):
         self.slider.param.watch( lambda event: setattr(self.git_filter, 'date_range', event.new),'value')
 
     def __panel__(self):
+        print(f"🧩 __panel__ appelé pour {self.__class__.__name__}")
         return self.slider
 
 class PerformanceByCommit(pn.viewable.Viewer):
@@ -903,6 +906,7 @@ class PerformanceByCommit(pn.viewable.Viewer):
         )
 
     def __panel__(self):
+        print(f"🧩 __panel__ appelé pour {self.__class__.__name__}")
         return self.tabs
 
 ##########################
@@ -957,6 +961,7 @@ class CodeSelector(pn.viewable.Viewer):
         self.apply_button.disabled = not active
 
     def __panel__(self):
+        print(f"🧩 __panel__ appelé pour {self.__class__.__name__}")
         return pn.Row(self.select_all_button, self.deselect_all_button, self.widget, self.apply_button, self.spinner)
     
 ##############################
@@ -976,6 +981,7 @@ class FilteredTable(pn.viewable.Viewer):
         self.table.value = self.filter_model.get_filtered_df()
 
     def __panel__(self):
+        print(f"🧩 __panel__ appelé pour {self.__class__.__name__}")
         return self.table
 
 #####################
@@ -1014,6 +1020,7 @@ class GitIndicators(pn.viewable.Viewer):
             self.last_commit_text.value = "Aucune date disponible"
 
     def __panel__(self):
+        print(f"🧩 __panel__ appelé pour {self.__class__.__name__}")
         return pn.Row(self.commit_count, self.git_version_count, self.last_commit_text)
 
 
@@ -1044,6 +1051,7 @@ class ConfigPanel(pn.viewable.Viewer):
         self._update_options()
         
     def __panel__(self):
+        print(f"🧩 __panel__ appelé pour {self.__class__.__name__}")
         return pn.Column(
             self.select_all_button,
             self.clear_button,
@@ -1084,6 +1092,7 @@ class TableConfig(pn.viewable.Viewer):
         self.lv2_filter.param.watch(self._update_table, 'value')
 
     def __panel__(self):
+        print(f"🧩 __panel__ appelé pour {self.__class__.__name__}")
         return pn.Accordion( ("📥 Selected Configuration", self.tab))
     
     def _update_table(self, event=None):
@@ -1125,6 +1134,7 @@ class Panel_graph_envelope(pn.viewable.Viewer):
         
 
     def __panel__(self):
+        print(f"🧩 __panel__ appelé pour {self.__class__.__name__}")
         return pn.Row(self.ListBouton, self.graphPanel)
         
     def _plot_enveloppe_incertitude(self, show_envelope, noiseKey):    
@@ -1281,6 +1291,7 @@ class Mutual_information_Panels (pn.viewable.Viewer) :
         self.mutual_information_ntrial = pn.bind(self._plottrial, self.lv2_model.param.value, self.noiseScale.param.value)
 
     def __panel__(self):
+        print(f"🧩 __panel__ appelé pour {self.__class__.__name__}")
         return pn.Column(
             pn.widgets.TooltipIcon(value="Seuls les configuration avec des valeurs pour \"Mutual Information.MI\", \"Mutual Information.MI_min\", \"Mutual Information.MI_max\" sont affichées. "), 
             pn.Row(self.plot_mutual_information),
@@ -1399,6 +1410,7 @@ class ConfigUniqueSelector(pn.viewable.Viewer):
             self.selector.disabled = True
 
     def __panel__(self):
+        print(f"🧩 __panel__ appelé pour {self.__class__.__name__}")
         return pn.Column(
             pn.pane.Markdown("**Configurations :**"),
             self.selector
@@ -1436,6 +1448,7 @@ class LogViewer(pn.viewable.Viewer):
         self.output_pane.object = self.unique_conf_model.log
 
     def __panel__(self):
+        print(f"🧩 __panel__ appelé pour {self.__class__.__name__}")
         # Affichage du sélecteur et des onglets
         return pn.Column(
             self.radioBoutton,
@@ -1472,6 +1485,7 @@ class Tasks_Histogramme(pn.viewable.Viewer):
             self.button_time_perc.name = '⏱'
     
     def __panel__(self):
+        print(f"🧩 __panel__ appelé pour {self.__class__.__name__}")
         return pn.Row(self.ListBouton, self.graphPanel)
     
     def _plot_task_data(self,percent, index, noiseKey):
@@ -1619,6 +1633,7 @@ class PanelCommit(pn.viewable.Viewer):
         self.research_config_filter = Research_config_filter(command_filter=self.command_filter)
 
     def __panel__(self):
+        print(f"🧩 __panel__ appelé pour {self.__class__.__name__}")
         return pn.Column(
             self.indicators,
             self.date_slider,
@@ -1641,7 +1656,6 @@ noiseScale = NoiseScale(noise_label= noise_label)
 # ------------------------------------------------------------------
 # Point d’entrée unique
 # ------------------------------------------------------------------
-
 
 def main():
     print(ud.unidata_version)
