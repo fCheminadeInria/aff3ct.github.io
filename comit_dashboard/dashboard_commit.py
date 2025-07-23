@@ -60,17 +60,24 @@ def load_table(name: str, fmt: str = "parquet") -> pd.DataFrame:
 
 def load_data_sync() -> None:
     """Charge toutes les tables dans pn.state.cache['db'] (synchrone)."""
+    print("✅ load_data_sync() appelé")
     if IS_PYODIDE or IS_PANEL_CONVERT:
         fmt='json'
     else:    
         fmt = 'parquet'
     
     df_commands = load_table('command', fmt)
+    print("1/6 command chargé")
     df_param = load_table('parameters', fmt)
+    print("2/6 parameters chargé")
     df_tasks = load_table('tasks', fmt)
+    print("3/6 tasks chargé")
     df_runs = load_table('runs', fmt)
+    print("4/6 runs chargé")
     df_git = load_table('git', fmt)
+    print("5/6 git chargé")
     df_log = load_table('logs', fmt)
+    print("6/6 logs chargé")
 
     if df_commands.empty:
         raise ValueError("Impossible de charger les données pour 'command'. Veuillez vérifier l'URL et les dépendances.")
@@ -100,6 +107,7 @@ def load_data_sync() -> None:
     }
 
     apply_typing_code()
+    print("✅ load_data_sync() terminé")
     
 # ------------------------------------------------------------------------------
 #  Typage automatique (copié-collé de la version JSON)
@@ -326,7 +334,7 @@ def generate_typing_code(df, df_name="df"):
 #  Initialisation du dashboard
 # ------------------------------------------------------------------------------
 def init_dashboard():
-    load_data_sync()
+    print("✅ init_dashboard() appelé")
 
     db = pn.state.cache['db']
 
@@ -397,7 +405,10 @@ def init_dashboard():
         accent="teal",
         theme_toggle=False,
     )
+    print("✅ init_dashboard() avant servable")
+    
     template.servable()
+    print("✅ init_dashboard() après servable")
     return template
 
 ##################################### Niveau Global ####################################
