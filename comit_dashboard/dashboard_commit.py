@@ -60,7 +60,7 @@ def load_table(name: str, fmt: str = "parquet") -> pd.DataFrame:
 
 def load_data_sync() -> None:
     """Charge toutes les tables dans pn.state.cache['db'] (synchrone)."""
-    print("✅ load_data_sync() appelé")
+    print("⚙️ load_data_sync() appelé")
     if IS_PYODIDE or IS_PANEL_CONVERT:
         fmt='json'
     else:    
@@ -334,7 +334,7 @@ def generate_typing_code(df, df_name="df"):
 #  Initialisation du dashboard
 # ------------------------------------------------------------------------------
 def init_dashboard():
-    print("✅ init_dashboard() appelé")
+    print("⚙️ init_dashboard() appelé")
 
     db = pn.state.cache['db']
 
@@ -374,7 +374,7 @@ def init_dashboard():
     unique_model = ConfigUniqueModel(lv2_model=lvl2_filter)
 
     panel_par_config = pn.Column(
-        pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ✏️ Logs</h2></div>"),
+        pn.pane.HTML("<h3> ✏️ Logs</h3>"),
         LogViewer(unique_conf_model=unique_model),
         sizing_mode="stretch_width"
     )
@@ -387,16 +387,21 @@ def init_dashboard():
     panelData = pn.Column(config_count, sizing_mode="stretch_width")
 
     dashboard = pn.Column(
-        pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ✏️ Niveau 1 : Evolution par commit </h2></div>"),
+        pn.pane.HTML("<h2>✏️ Niveau 1 : Evolution par commit</h2>"),
         panelCommit,
-        pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ☎️ Niveau 2 : BER / FER </h2></div>"),
+        pn.pane.HTML("<h2>☎️ Niveau 2 : BER / FER</h2>"),
         panelConfig,
-        pn.pane.HTML("<div style='font-size: 28px;background-color: #e0e0e0; padding: 10px;line-height : 0px;'><h2> ⚙️ Niveau 3 : Analyse à la commande</h2></div>"),
+        pn.pane.HTML("<h2>⚙️ Niveau 3 : Analyse à la commande</h2>"),
         panel_par_config,
+        sizing_mode="stretch_width"
     )
-    
-    logo = pn.pane.Image("https://raw.githubusercontent.com/fCheminadeInria/aff3ct.github.io/refs/heads/master/comit_dashboard/image/93988066-1f77-4b42-941f-1d5ef89ddca2.webp")
-    
+
+    logo = pn.pane.Image(
+        "https://raw.githubusercontent.com/fCheminadeInria/aff3ct.github.io/"
+        "refs/heads/master/comit_dashboard/image/93988066-1f77-4b42-941f-1d5ef89ddca2.webp",
+        width=200
+    )
+
     template = pn.template.FastListTemplate(
         title="Commits Dashboard",
         sidebar=[logo, noiseScale, pn.layout.Divider(), panelData],
@@ -405,10 +410,8 @@ def init_dashboard():
         accent="teal",
         theme_toggle=False,
     )
-    print("✅ init_dashboard() avant servable")
-    
-    template.servable()
-    print("✅ init_dashboard() après servable")
+
+    print("✅ init_dashboard() terminé")
     return template
 
 ##################################### Niveau Global ####################################
@@ -1647,7 +1650,7 @@ print(ud.unidata_version)
 if IS_PANEL_CONVERT:
     # GitHub-Pages (pyodide-worker) → on charge et on sert
     load_data_sync()
-    init_dashboard()
+    init_dashboard().servable()
 
 elif IS_PYODIDE:
     # JupyterLite ou autre environnement Pyodide → onload
