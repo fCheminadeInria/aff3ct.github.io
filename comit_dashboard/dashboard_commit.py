@@ -38,24 +38,40 @@ IS_PANEL_CONVERT = os.getenv("PANEL_CONVERT") == "1"
 def load_table(name: str, fmt: str = "parquet") -> pd.DataFrame:
     GITLAB_PACKAGE_URL = "https://gitlab.inria.fr/api/v4/projects/1420/packages/generic/gitlab-elk-export/latest/"
     url = f"{GITLAB_PACKAGE_URL}{name}.{fmt}"
-    try:
-        with urllib.request.urlopen(url, timeout=None) as response:
-            data = response.read()
-            buf = BytesIO(data)
+    CHUNK = 1024 * 1024          # 1 Mo par appel
 
-            if fmt == "parquet":
-                return pd.read_parquet(buf)
-            elif fmt == "json":
-                try:
-                    return pd.read_json(buf, orient="records", lines=True)
-                except ValueError:
-                    buf.seek(0)
-                    return pd.read_json(buf, orient="records")
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Encoding": "identity"   # désactive la compression bricolée
+    }
+
+    all_data = BytesIO()
+    start = 0
+
+    while True:
+        headers["Range"] = f"bytes={start}-{start + CHUNK - 1}"
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=None) as resp:
+                data = resp.read()
+                if not data:          # plus rien
+                    break
+                all_data.write(data)
+                if len(data) < CHUNK: # dernier morceau
+                    break
+                start += len(data)
+        except urllib.error.HTTPError as e:
+            if e.code == 416:         # Range Not Satisfiable → fin atteinte
+                break
             else:
-                print(f"❌ Format non supporté : {fmt}")
-                return pd.DataFrame()
-    except Exception as e:
-        print(f"❌ Erreur lors du chargement de {name}.{fmt} : {e}")
+                raise
+
+    all_data.seek(0)
+    if fmt == "json":
+        return pd.read_json(all_data, lines=True)
+    elif fmt == "parquet":
+        return pd.read_parquet(all_data)
+    else:
         return pd.DataFrame()
 
 def load_data_sync() -> None:
