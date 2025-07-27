@@ -30,19 +30,19 @@ except ImportError:
 # ------------------------------------------------------------------------------
 IS_PYODIDE       = sys.platform == "emscripten"
 IS_PANEL_CONVERT = os.getenv("PANEL_CONVERT") == "1"
+GITLAB_PACKAGE_URL = "https://gitlab.inria.fr/api/v4/projects/1420/packages/generic/gitlab-elk-export/latest/"
 
 # ------------------------------------------------------------------------------
 #  Chargement des données – SYNCHRONE
 # ------------------------------------------------------------------------------
 
 def load_table(name: str, fmt: str = "parquet") -> pd.DataFrame:
-    GITLAB_PACKAGE_URL = "https://gitlab.inria.fr/api/v4/projects/1420/packages/generic/gitlab-elk-export/latest/"
+    
     url = f"{GITLAB_PACKAGE_URL}{name}.{fmt}"
     CHUNK = 1024 * 1024          # 1 Mo par appel
 
     headers = {
         "User-Agent": "Mozilla/5.0",
-        "Accept-Encoding": "identity"   # désactive la compression bricolée
     }
 
     all_data = BytesIO()
@@ -100,7 +100,7 @@ def load_data_sync() -> None:
     df_commands.set_index('Command_id', inplace=True)
 
     df_param.set_index('param_id', inplace=True)
-    df_tasks.set_index('RUN_id', inplace=True)
+    df_tasks.set_index('Task_id', inplace=True)
     df_runs.set_index('RUN_id', inplace=True)
     df_git.set_index('sha1', inplace=True)
     df_log.set_index('Log_id', inplace=True)
@@ -314,7 +314,7 @@ def apply_typing_code():
 
     # Typage pour logs
     logs = pn.state.cache['db']['logs']
-    logs['log'] = logs['log'].astype(str)
+    logs['log'] = logs['log_path'].astype(str)
     logs['hash'] = logs['hash'].astype(str)
     logs['filename'] = logs['filename'].astype(str)
     logs['Date_Execution'] = logs['Date_Execution'].astype(str)
@@ -389,9 +389,18 @@ def init_dashboard():
 
     unique_model = ConfigUniqueModel(lv2_model=lvl2_filter)
 
+    # Histogramme des temps des jobs
+    task_Time_Histogramme = Tasks_Histogramme(
+        unique_conf_model = unique_model,
+        noiseScale = noiseScale
+    ) 
+
+
+
     panel_par_config = pn.Column(
+        task_Time_Histogramme,
         pn.pane.HTML("<h3> ✏️ Logs</h3>"),
-        LogViewer(unique_conf_model=unique_model),
+        #LogViewer(unique_conf_model=unique_model),
         sizing_mode="stretch_width"
     )
 
@@ -614,7 +623,7 @@ class Research_config_filter(pn.viewable.Viewer):
                 height=400,
                 styles={'overflow-y': 'auto'}),
                 title="🔍 Filtres de recherche",
-                collapsed=False
+                collapsed=True
                 )
             
     def _get_current_filter(self):
@@ -701,7 +710,7 @@ class Lvl2_Filter_Model(param.Parameterized):
 
 class ConfigUniqueModel(param.Parameterized):
     lv2_model = param.ClassSelector(default=None, class_=Lvl2_Filter_Model)
-    value = param.Selector(default=None, objects=[])
+    config = param.Selector(default=None, objects=[])
     date = param.Selector(default=None, objects=[])
     options = param.Selector(default=None, objects=[])
 
@@ -712,21 +721,46 @@ class ConfigUniqueModel(param.Parameterized):
 
     @property
     def df(self):
-        if self.value is None:
+        if self.config is None:
             return self._df_configs_from_lvl2.iloc[0:0]  # DataFrame vide
-        return self._df_configs_from_lvl2.loc[self.value]
+        return self._df_configs_from_lvl2.loc[self.config]
 
     @property
     def df_runs(self):
         db = pn.state.cache.get('db', {})
-        if 'runs' not in db or self.value is None:
+        if 'runs' not in db or self.config is None:
             return pd.DataFrame()
-        return  db['runs'][db['runs']['Command_id']== self.value]        
+        return  db['runs'][db['runs']['Command_id']== self.config]        
+
+    @property
+    def df_tasks(self):
+        db = pn.state.cache.get('db', {})
+        if 'tasks' not in db or self.config is None:
+            return pd.DataFrame()
+        df_tasks = db['tasks']
+
+        df_runs = self.df_runs
+        df_runs = df_runs[df_runs['Date_Execution'] == self.date]
+        run_ids = df_runs.index.unique().tolist()
+        if not run_ids:          # Évite une comparaison inutile
+            return pd.DataFrame(columns=df_tasks.columns)
+        
+        df_tasks = df_tasks[df_tasks['RUN_id'].isin(run_ids)]
+        
+        noise_cols = list(noise_label.values())          # noms réels
+        df_noise = df_runs[noise_cols]
+        
+        df_tasks = (df_tasks
+                .set_index('RUN_id')
+                .join(df_noise, how='left')
+                .reset_index())
+        # Filtre les tâches
+        return df_tasks
 
     @property
     def df_logs(self):
         db = pn.state.cache.get('db', {})
-        if 'logs' not in db or self.value is None:
+        if 'logs' not in db or self.config is None:
             return pd.DataFrame()
         df_logs = db['logs']
         log_hash = self.df_runs['log_hash'].unique() if not self.df_runs.empty else []
@@ -744,12 +778,49 @@ class ConfigUniqueModel(param.Parameterized):
         
         if 'log' in match.columns:
             # Encapsuler le log dans un bloc de code Markdown
-            contenu = match.iloc[0]['log']
-            return f"```\n{contenu}\n```"
+            path = match.iloc[0]['log_path']
+            return f"```\n{self.__load_log(path)}\n```"
         else:
             return "```Colonne 'log' manquante.```"
 
-    @param.depends('value', watch=True)
+    def __load_log(self, log_path: str) -> str:
+        """Lit un fichier de log distant hébergé sur GitLab."""
+        CHUNK = 1024 * 1024  # 1 Mo
+        url = f"{GITLAB_PACKAGE_URL}{log_path}"  # log_path contient déjà le nom du fichier, ex : 'logs/LOG2740.log'
+
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+        }
+
+        all_data = BytesIO()
+        start = 0
+
+        while True:
+            headers["Range"] = f"bytes={start}-{start + CHUNK - 1}"
+            req = urllib.request.Request(url, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=None) as resp:
+                    data = resp.read()
+                    if not data:
+                        break
+                    all_data.write(data)
+                    if len(data) < CHUNK:
+                        break
+                    start += len(data)
+            except urllib.error.HTTPError as e:
+                if e.code == 416:  # fin du fichier
+                    break
+                elif e.code == 404:
+                    return "❌ Erreur : Le fichier de log est introuvable sur le serveur."
+                else:
+                    return f"❌ Erreur HTTP : {e.code} - {e.reason}"
+            except Exception as e:
+                return f"❌ Erreur inattendue : {str(e)}"
+
+        return all_data.getvalue().decode('utf-8', errors='replace')
+
+
+    @param.depends('config', watch=True)
     def _update_date(self):
         if 'hash' in self.df_logs.columns :
             self.date = self.df_logs['Date_Execution'].iloc[0]
@@ -777,21 +848,21 @@ class ConfigUniqueModel(param.Parameterized):
         return matched[0] if len(matched) > 0 else None
 
     def alias(self):
-        if self.value is None or self.value not in self._df_configs_from_lvl2.index:
+        if self.config is None or self.config not in self._df_configs_from_lvl2.index:
             return '-'
-        return self._df_configs_from_lvl2.at[self.value, 'Config_Alias']
+        return self._df_configs_from_lvl2.at[self.config, 'Config_Alias']
 
-    def value_by_alias(self, alias):
+    def config_by_alias(self, alias):
         id = self._find_id_by_alias(alias)
         if id is not None:
-            self.value = id
+            self.config = id
 
     @param.depends('lv2_model.df', watch=True)
     def _on_lvl2_df_change(self):
         opts = self._df_configs_from_lvl2.index.tolist()
         # Initialise la valeur avec le command_id correspondant au premier alias
-        if self.value not in opts :
-            self.value = opts[0] if opts else None
+        if self.config not in opts :
+            self.config = opts[0] if opts else None
         self.options = opts
 
 
@@ -859,7 +930,7 @@ class PerformanceByCommit(pn.viewable.Viewer):
         
         self.tabs = pn.Tabs(
             ('⏱️ Latence', self.plot_latency_pane),
-            ('📈 Débit', self.plot_throughput_pane),
+            ('🚄 Débit', self.plot_throughput_pane),
         )
         
     def _update_all(self, *events):
@@ -1436,7 +1507,7 @@ class LogViewer(pn.viewable.Viewer):
         self.date_selector = pn.widgets.Select(name="Date d'exécution", options=[], visible=False)
         self.date_selector.param.watch(self._update_log_on_date_change, "value")
 
-    @param.depends('unique_conf_model.value', watch=True)
+    @param.depends('unique_conf_model.config', watch=True)
     def _update_dates(self, event=None):
         self.date_selector.options = self.unique_conf_model.options_dates
         self.date_selector.value = self.unique_conf_model.date
@@ -1464,22 +1535,23 @@ class LogViewer(pn.viewable.Viewer):
 # Graphe de tâches
 # ------------------------------------------------------------------
 
+
+
+
 class Tasks_Histogramme(pn.viewable.Viewer):
     # Paramètres configurables
-    df = param.DataFrame(doc="Le dataframe contenant les données")
-    multi_choice_widget = param.ClassSelector(default=None, class_=pn.viewable.Viewer, doc="Widget MultiChoice")
-    noiseScale = param.ClassSelector(default=None, class_=pn.viewable.Viewer,doc="Choix de l'échelle de bruit par passage du label de la colonne")
+    unique_conf_model = param.ClassSelector(class_=ConfigUniqueModel, doc="Selecteur de configurations uniques")
+    noiseScale = param.ClassSelector(class_=NoiseScale, doc="Choix de l'échelle de bruit par passage du label de la colonne")
 
     def __init__(self, **params):
         super().__init__(**params)
-        
         self.button_time_perc = pn.widgets.Toggle(name='%', value=True)
         self.button_time_perc.param.watch(self.changeIcon, 'value')
         self.ListBouton = pn.Column(
             pn.widgets.TooltipIcon(value="Affichage des temps des tâches en milli-seconde ou en %."), 
             self.button_time_perc,
             width=50)
-        self.graphPanel = pn.bind(self._plot_task_data, self.button_time_perc, self.multi_choice_widget.param.value, self.noiseScale.param.value)
+        self.graphPanel = pn.bind(self._plot_task_data, self.button_time_perc, self.unique_conf_model.param.date, self.noiseScale.param.value)
         
     def changeIcon(self, event) :
         if event.new : 
@@ -1490,37 +1562,33 @@ class Tasks_Histogramme(pn.viewable.Viewer):
     def __panel__(self):
         return pn.Row(self.ListBouton, self.graphPanel)
     
-    def _plot_task_data(self,percent, index, noiseKey):
-        db = pn.state.cache['db']
-        
-        
+    def _plot_task_data(self, percent, index, noiseKey):
         if index is None :
-            df_filtred = self.df
-        else :
-            df_filtred = self.df.loc[index] 
-        
-        if df_filtred.empty:
-            self.button_time_perc.disabled=True
-            return pn.pane.Markdown(f"Graphes de Tâches : Pas de données de tâches disponibles pour les configurations sélectionnées.")
-        else : 
-            self.button_time_perc.disabled=False
+            return pn.pane.Markdown(f"Histogramme des tâches : Sélectionner une configuration pour afficher.")
+        df = self.unique_conf_model.df_tasks
+
+        if df.empty:
+            self.button_time_perc.disabled = True
+            return pn.pane.Markdown(f"Histogramme des tâches : Pas de données de tâches disponibles pour l'execution de la configuration sélectionnée.")
+        else:
+            self.button_time_perc.disabled = False
             
-        if percent :
+        if percent:
             y_label = ('Time', 'Durée')
-        else :
-            y_label = ('Perc','Durée (%)')
+        else:
+            y_label = ('Perc', 'Durée (%)')
         
-        # Pivot des données pour que chaque combinaison Config_Hash + Signal Noise Ratio(SNR).Eb/N0(dB) ait des colonnes pour les temps des tâches
-        pivot_df = df_filtred.pivot_table(
+        # Pivot des données pour que chaque combinaison Signal Noise Ratio(SNR).Eb/N0(dB) ait des colonnes pour les temps des tâches
+        pivot_df = df.pivot_table(
             values=y_label[0], 
-            index=['Config_Hash', noiseKey], 
+            index=[noiseKey], 
             columns='Task',
             aggfunc='sum', 
             fill_value=0
         )
 
         # Générer une palette de couleurs automatiquement selon le nombre de configurations
-        colors = px.colors.qualitative.Plotly[:len(index) * len(df_filtred['Task'].unique())]
+        colors = px.colors.qualitative.Plotly[:len(index) * len(df['Task'].unique())]
 
         # Initialiser la figure Plotly
         fig = go.Figure()
@@ -1528,7 +1596,7 @@ class Tasks_Histogramme(pn.viewable.Viewer):
         # Ajouter chaque tâche comme une barre empilée
         for task in pivot_df.columns:
             fig.add_trace(go.Bar(
-                x=pivot_df.index.map(lambda x: f"{db['commands'].loc[x[0], 'Config_Alias']} - SNR: {x[1]}"),  # Combinaison Config_Hash + SNR comme étiquette
+                x=pivot_df.index.map(lambda x: f"SNR: {x}"),  # SNR comme étiquette
                 y=pivot_df[task],
                 name=task
             ))
@@ -1537,14 +1605,13 @@ class Tasks_Histogramme(pn.viewable.Viewer):
         fig.update_layout(
             barmode='stack',
             title=f"Temps des tâches par Configuration et Niveau de Bruit  : {noiseKey}",
-            xaxis_title="Configuration et Niveau de Bruit",
+            xaxis_title="Niveau de Bruit",
             yaxis_title=y_label[1],
             xaxis=dict(tickangle=25),  # Rotation des étiquettes de l'axe x
             template="plotly_white",
             height=900,
             showlegend=True,
             margin=dict(t=70, b=50, l=50, r=10)
-            
         )
         return pn.pane.Plotly(fig, sizing_mode="stretch_width")
 
