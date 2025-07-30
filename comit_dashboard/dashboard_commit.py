@@ -740,10 +740,10 @@ class ExecUniqueModel(param.Parameterized):
     @property
     def df_tasks(self):
         """Charge les tâches associées à un exec unique."""
-        if self.log_hash is None or self.unique_conf_model is None:
+        if self.log_hash is None:
             return pd.DataFrame()
 
-        table_name = f"{self.log_hash}"
+        table_name = f"tasks/{self.log_hash}"
         try:
             df_tasks = load_table(table_name, fmt='json')
             if df_tasks.empty:
@@ -753,7 +753,7 @@ class ExecUniqueModel(param.Parameterized):
             return pd.DataFrame()
 
         # Ajoute les colonnes de bruit depuis le df_runs
-        df_runs = self.df
+        df_runs = self.df_runs
         noise_cols = list(noise_label.values())
         if self.log_hash not in df_runs.index:
             return df_tasks
@@ -770,22 +770,12 @@ class ExecUniqueModel(param.Parameterized):
         """Retourne le contenu du log associé au run_id (pas basé sur date)."""
         if self.log_hash is None:
             return "```Aucun run sélectionné.```"
-
-        df_runs = self.df
-        if self.log_hash not in df_runs.index:
-            return "```Run non trouvé dans les métadonnées.```"
-
-        row = df_runs.loc[self.log_hash]
-        if 'log_path' not in row or pd.isna(row['log_path']):
-            return "```Chemin du log non disponible.```"
-
-        path = row['log_path']
-        return f"```\n{self.__load_log(path)}\n```"
+        return f"```\n{self.__load_log()}\n```"
 
     def __load_log(self) -> str:
         """Lit un fichier distant hébergé sur GitLab."""
         CHUNK = 1024 * 1024
-        url = f"{GITLAB_PACKAGE_URL}{log_path}"
+        url = f"{GITLAB_PACKAGE_URL}/logs/{self.log_hash}.log"
 
         headers = {"User-Agent": "Mozilla/5.0"}
         all_data = BytesIO()
