@@ -80,47 +80,42 @@ def load_data_sync() -> None:
     if IS_PYODIDE or IS_PANEL_CONVERT:
         fmt='json'
     else:    
-        fmt = 'parquet'
+        #fmt = 'parquet'
+        fmt='json'
     
-    df_commands = load_table('command', fmt)
-    print("1/6 command chargé")
-    df_param = load_table('parameters', fmt)
-    print("2/6 parameters chargé")
-    df_tasks = load_table('tasks', fmt)
-    print("3/6 tasks chargé")
-    df_runs = load_table('runs', fmt)
-    print("4/6 runs chargé")
-    df_git = load_table('git', fmt)
-    print("5/6 git chargé")
-    df_log = load_table('logs', fmt)
-    print("6/6 logs chargé")
+    tables = [
+        'command',
+        'parameters',
+        'runs',
+        'git',
+        'logs'
+    ]
+    db = dict()
+    for table in tables:
+        db[table] = load_table(table, fmt)
+        print(f"{tables.index(table) + 1}/{len(tables)} {table} chargé")
 
-    if df_commands.empty:
+    if db['command'].empty:
         raise ValueError("Impossible de charger les données pour 'command'. Veuillez vérifier l'URL et les dépendances.")
-    df_commands.set_index('Command_id', inplace=True)
+    db['command'].set_index('Command_id', inplace=True)
 
-    df_param.set_index('param_id', inplace=True)
-    df_tasks.set_index('Task_id', inplace=True)
-    df_runs.set_index('RUN_id', inplace=True)
-    df_git.set_index('sha1', inplace=True)
-    df_log.set_index('Log_id', inplace=True)
+    db['parameters'].set_index('param_id', inplace=True)
+    db['runs'].set_index('RUN_id', inplace=True)
+    db['git'].set_index('sha1', inplace=True)
+    if db['logs'].empty:
+        db['logs'] = pd.DataFrame(columns=['Log_id', 'log_path', 'hash', 'filename', 'Date_Execution'])
+    db['logs'].set_index('Log_id', inplace=True)
 
     # Alias
-    df_commands['Config_Alias'] = (
-        df_commands.index.astype(str) + " : " +
-        df_commands['Command_short'].astype(str) + "_" +
-        df_commands['sha1'].astype(str)
+    db['command']['Config_Alias'] = (
+        db['command'].index.astype(str) + " : " +
+        db['command']['Command_short'].astype(str) + "_" +
+        db['command']['sha1'].astype(str)
     )
 
-    pn.state.cache['db'] = {
-        "commands": df_commands,
-        "tasks": df_tasks,
-        "runs": df_runs,
-        "git": df_git,
-        "param": df_param,
-        "logs": df_log,
-        "config_aliases": dict(zip(df_commands.index, df_commands['Config_Alias']))
-    }
+    db['config_aliases'] = dict(zip(db['command'].index, db['command']['Config_Alias']))
+
+    pn.state.cache['db'] = db
 
     apply_typing_code()
     print("✅ load_data_sync() terminé")
@@ -132,17 +127,13 @@ def load_data_sync() -> None:
 def apply_typing_code():
     ''' Applique le typage des données  (copier coller du résultat de generate_typing_code) ''' 
     # Typage pour commands
-    commands = pn.state.cache['db']['commands']
+    commands = pn.state.cache['db']['command']
     commands['Command'] = commands['Command'].astype(str)
     commands['sha1'] = commands['sha1'].astype(str)
     commands['Command_short'] = commands['Command_short'].astype(str)
     commands['param_id'] = commands['param_id'].astype(str)
     commands['Config_Alias'] = commands['Config_Alias'].astype(str)
-    pn.state.cache['db']['commands'] = commands
-
-    # Typage pour tasks
-    tasks = pn.state.cache['db']['tasks']
-    pn.state.cache['db']['tasks'] = tasks
+    pn.state.cache['db']['command'] = commands
 
     # Typage pour runs
     runs = pn.state.cache['db']['runs']
@@ -185,7 +176,7 @@ def apply_typing_code():
     pn.state.cache['db']['git'] = git
 
     # Typage pour param
-    param = pn.state.cache['db']['param']
+    param = pn.state.cache['db']['parameters']
     param['Channel.Add users'] = param['Channel.Add users'].astype(str)
     param['Channel.Complex'] = param['Channel.Complex'].astype(str)
     param['Channel.Implementation'] = param['Channel.Implementation'].astype(str)
@@ -310,7 +301,7 @@ def apply_typing_code():
     param['Simulation.Global iterations (I)'] = param['Simulation.Global iterations (I)'].astype(str)
     param['Modem.ROP estimation'] = param['Modem.ROP estimation'].astype(str)
     param['Simulation.PDF path'] = param['Simulation.PDF path'].astype(str)
-    pn.state.cache['db']['param'] = param
+    pn.state.cache['db']['parameters'] = param
 
     # Typage pour logs
     logs = pn.state.cache['db']['logs']
@@ -356,8 +347,8 @@ def init_dashboard():
 
     git_filter = GitFilterModel(df_git=db['git'])
 
-    merged_df = db['commands'].merge(
-        db['param'][['Simulation.Code type (C)']],
+    merged_df = db['command'].merge(
+        db['parameters'][['Simulation.Code type (C)']],
         left_on='param_id', right_index=True, how='left'
     )
     merged_df.rename(columns={'Simulation.Code type (C)': 'code'}, inplace=True)
@@ -395,8 +386,6 @@ def init_dashboard():
         noiseScale = noiseScale
     ) 
 
-
-
     panel_par_config = pn.Column(
         task_Time_Histogramme,
         pn.pane.HTML("<h3> ✏️ Logs</h3>"),
@@ -406,7 +395,7 @@ def init_dashboard():
 
     config_count = pn.indicators.Number(
         name="Configurations en base",
-        value=db['commands'].shape[0] if not db['commands'].empty else 0
+        value=db['command'].shape[0] if not db['command'].empty else 0
     )
 
     panelData = pn.Column(config_count, sizing_mode="stretch_width")
@@ -711,7 +700,7 @@ class Lvl2_Filter_Model(param.Parameterized):
 class ConfigUniqueModel(param.Parameterized):
     lv2_model = param.ClassSelector(default=None, class_=Lvl2_Filter_Model)
     config = param.Selector(default=None, objects=[])
-    date = param.Selector(default=None, objects=[])
+    run_id = param.Selector(default=None, objects=[])
     options = param.Selector(default=None, objects=[])
 
     @property
@@ -734,28 +723,78 @@ class ConfigUniqueModel(param.Parameterized):
 
     @property
     def df_tasks(self):
-        db = pn.state.cache.get('db', {})
-        if 'tasks' not in db or self.config is None:
+        if self.run_id is None:
             return pd.DataFrame()
-        df_tasks = db['tasks']
+        db = pn.state.cache.get('db', {})
+        
+        # 1) Récupérer le run directement
+        df_runs = self.df_runs
+        if self.run_id not in df_runs.index:
+            return pd.DataFrame()
+        
+        # 2) Charger les tâches
+        table_name = f"{self.run_id}_tasks"
+        try:
+            df_tasks = load_table(table_name, fmt='json')
+            if df_tasks.empty:
+                return pd.DataFrame()
+        except Exception as e:
+            print(f"⚠️ Impossible de charger {table_name}: {e}")
+            return pd.DataFrame()
+        
+        # 3) Jointure avec les métadonnées
+        noise_cols = list(noise_label.values())
+        df_noise = df_runs.loc[[self.run_id], noise_cols]  # Sélectionne la ligne du run
+        
+        df_tasks = (df_tasks
+                    .set_index('RUN_id')
+                    .join(df_noise, how='left')
+                    .reset_index())
+        
+        return df_tasks
 
+    @property
+    def df_tasks(self):
+        db = pn.state.cache.get('db', {})
+        if self.config is None:
+            return pd.DataFrame()
+        
+        # 1) Récupérer les RUN_id du jour via les runs déjà filtrés
         df_runs = self.df_runs
         df_runs = df_runs[df_runs['Date_Execution'] == self.date]
         run_ids = df_runs.index.unique().tolist()
         if not run_ids:          # Évite une comparaison inutile
-            return pd.DataFrame(columns=df_tasks.columns)
+           return pd.DataFrame()
+
+        # 2) Charger les tâches depuis les fichiers distants
+        all_tasks = []
+        for run_id in run_ids:
+            table_name = f"{run_id}_tasks"
+            try:
+                tasks = load_table(table_name, fmt='json')  # Les tâches sont en JSON Lines
+                if not tasks.empty:
+                    all_tasks.append(tasks)
+            except Exception as e:
+                # Gestion silencieuse des fichiers manquants ou erreurs de chargement
+                print(f"⚠️ Impossible de charger {table_name}: {e}")
+                continue
+
+        # 3) Concaténer et filtrer
+        if not all_tasks:
+            return pd.DataFrame()
         
-        df_tasks = df_tasks[df_tasks['RUN_id'].isin(run_ids)]
+        df_tasks = pd.concat(all_tasks, ignore_index=True)
         
-        noise_cols = list(noise_label.values())          # noms réels
+        # 4) Jointure avec les bruits
+        noise_cols = list(noise_label.values())
         df_noise = df_runs[noise_cols]
         
         df_tasks = (df_tasks
                 .set_index('RUN_id')
                 .join(df_noise, how='left')
                 .reset_index())
-        # Filtre les tâches
         return df_tasks
+
 
     @property
     def df_logs(self):
@@ -821,11 +860,12 @@ class ConfigUniqueModel(param.Parameterized):
 
 
     @param.depends('config', watch=True)
-    def _update_date(self):
-        if 'hash' in self.df_logs.columns :
-            self.date = self.df_logs['Date_Execution'].iloc[0]
+    def _update_run_id(self):
+        """Met à jour le run_id sélectionné avec le premier run disponible."""
+        if not self.df_runs.empty:
+            self.run_id = self.df_runs.index[0]  # Premier run_id disponible
         else:
-            self.date = None
+            self.run_id = None
             
     @property
     def options_dates(self):
@@ -1003,7 +1043,7 @@ class CodeSelector(pn.viewable.Viewer):
         self.widget = pn.widgets.CheckBoxGroup(name='Codes à afficher', inline=True)
         
         db = pn.state.cache['db']
-        self.widget.options = sorted(db['param']['Simulation.Code type (C)'].fillna('Non défini').unique().tolist())
+        self.widget.options = sorted(db['parameters']['Simulation.Code type (C)'].fillna('Non défini').unique().tolist())
         self.cmd_filter_model.param['code'].objects = self.widget.options   
         self.widget.value = self.cmd_filter_model.param['code'].default  # Affecte la valeur par défaut des codes     
         # self.widget.param.watch(self._update_filter, 'value')
@@ -1181,7 +1221,7 @@ class TableConfig(pn.viewable.Viewer):
         if self.meta :
             df_filtered = self.lv2_filter.df[['meta_id']] .merge(db['meta'] , left_on='meta_id',  right_index=True).drop(columns=['meta_id'])
         else :
-            df_filtered = self.lv2_filter.df[['param_id']].merge(db['param'], left_on='param_id', right_index=True).drop(columns=['param_id'])
+            df_filtered = self.lv2_filter.df[['param_id']].merge(db['parameters'], left_on='param_id', right_index=True).drop(columns=['param_id'])
         return df_filtered
 
 class Panel_graph_envelope(pn.viewable.Viewer):
@@ -1245,7 +1285,7 @@ class Panel_graph_envelope(pn.viewable.Viewer):
             config_data = df_filtred[df_filtred['Command_id'] == config]
             
             db = pn.state.cache['db']
-            alias = db['commands'].loc[config, 'Config_Alias'] #variable global pas propre mais commode
+            alias = db['command'].loc[config, 'Config_Alias'] #variable global pas propre mais commode
             if self.lab_group :
                 for j, t in enumerate(config_data[self.lab_group].unique()):  
                     task_data = config_data[config_data[self.lab_group] == t]
@@ -1697,7 +1737,7 @@ class PanelCommit(pn.viewable.Viewer):
         self.code_selector = CodeSelector(cmd_filter_model=self.command_filter)
         self.table = FilteredTable(filter_model=self.git_filter)
         db = pn.state.cache['db']
-        self.indicators = GitIndicators(df_git=db['git'], df_commands=db['commands'], filter_model=self.git_filter)
+        self.indicators = GitIndicators(df_git=db['git'], df_commands=db['command'], filter_model=self.git_filter)
         self.perfgraph = PerformanceByCommit(git_filter=self.git_filter, command_filter=self.command_filter)
         self.research_config_filter = Research_config_filter(command_filter=self.command_filter)
 
