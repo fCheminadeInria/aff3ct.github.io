@@ -331,7 +331,7 @@ def init_dashboard():
 
     # Histogramme des temps des jobs
     task_Time_Histogramme = Tasks_Histogramme(
-        unique_run_model = execUniqueModel,
+        unique_exec_model = execUniqueModel,
         noiseScale = noiseScale
     ) 
 
@@ -1457,7 +1457,7 @@ class LogViewer(pn.viewable.Viewer):
         self.date_selector = pn.widgets.Select(name="Date d'exécution", options=[], visible=False)
         self.date_selector.param.watch(self._update_log_on_date_change, "value")
 
-    @param.depends('execUniqueModel.run_id', watch=True)
+    @param.depends('execUniqueModel.log_hash', watch=True)
     def _update_dates(self, event=None):
         self.date_selector.options = self.unique_conf_model.options_dates
         self.date_selector.value = self.execUniqueModel.date
@@ -1497,7 +1497,7 @@ class Tasks_Histogramme(pn.viewable.Viewer):
             pn.widgets.TooltipIcon(value="Affichage des temps des tâches en milli-seconde ou en %."), 
             self.button_time_perc,
             width=50)
-        self.graphPanel = pn.bind(self._plot_task_data, self.button_time_perc, self.unique_exec_model.param.run_id, self.noiseScale.param.value)
+        self.graphPanel = pn.bind(self._plot_task_data, self.button_time_perc, self.unique_exec_model.param.log_hash, self.noiseScale.param.value)
         
     def changeIcon(self, event) :
         if event.new : 
