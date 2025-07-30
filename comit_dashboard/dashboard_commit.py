@@ -3,14 +3,11 @@ settings.resources = 'inline'
 
 import pandas as pd
 import panel as pn
-from datetime import datetime
-import argparse
 import re
 import plotly.graph_objs as go
 import plotly.express as px
 import plotly.graph_objects as go
 import param
-from panel.viewable import Viewer
 import unicodedata as ud
 import itertools
 from io import BytesIO
@@ -18,7 +15,6 @@ import sys
 import os
 import unicodedata as ud
 import urllib.request
-import json
 
 try:
     import pyarrow.parquet as pq
@@ -77,18 +73,13 @@ def load_table(name: str, fmt: str = "parquet") -> pd.DataFrame:
 def load_data_sync() -> None:
     """Charge toutes les tables dans pn.state.cache['db'] (synchrone)."""
     print("⚙️ load_data_sync() appelé")
-    if IS_PYODIDE or IS_PANEL_CONVERT:
-        fmt='json'
-    else:    
-        #fmt = 'parquet'
-        fmt='json'
+    fmt='json'
     
     tables = [
         'command',
         'parameters',
         'runs',
         'git',
-        'logs'
     ]
     db = dict()
     for table in tables:
@@ -102,9 +93,6 @@ def load_data_sync() -> None:
     db['parameters'].set_index('param_id', inplace=True)
     db['runs'].set_index('RUN_id', inplace=True)
     db['git'].set_index('sha1', inplace=True)
-    if db['logs'].empty:
-        db['logs'] = pd.DataFrame(columns=['Log_id', 'log_path', 'hash', 'filename', 'Date_Execution'])
-    db['logs'].set_index('Log_id', inplace=True)
 
     # Alias
     db['command']['Config_Alias'] = (
@@ -137,7 +125,7 @@ def apply_typing_code():
 
     # Typage pour runs
     runs = pn.state.cache['db']['runs']
-    runs['log_hash'] = runs['log_hash'].astype(str)
+    runs['log_path'] = runs['log_hash'].astype(str)
     runs['Date_Execution'] = pd.to_datetime(runs['Date_Execution'], errors='coerce')
     runs['Bit Error Rate (BER) and Frame Error Rate (FER).BE'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).BE'], errors='coerce').astype('Int64')
     runs['Bit Error Rate (BER) and Frame Error Rate (FER).BER'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).BER'], errors='coerce')
@@ -149,12 +137,6 @@ def apply_typing_code():
     runs['Signal Noise Ratio(SNR).Eb/N0(dB)'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Eb/N0(dB)'], errors='coerce')
     runs['Signal Noise Ratio(SNR).Es/N0(dB)'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Es/N0(dB)'], errors='coerce')
     runs['Signal Noise Ratio(SNR).Sigma'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Sigma'], errors='coerce')
-    runs['source.type'] = runs['source.type'].astype(str)
-    runs['id'] = runs['id'].astype(str)
-    runs['url'] = runs['url'].astype(str)
-    runs['status'] = runs['status'].astype(str)
-    runs['job_id'] = runs['job_id'].astype(str)
-    runs['job_name'] = runs['job_name'].astype(str)
     runs['Signal Noise Ratio(SNR).Event Probability'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Event Probability'], errors='coerce')
     runs['Mutual Information.MI'] = pd.to_numeric(runs['Mutual Information.MI'], errors='coerce')
     runs['Mutual Information.MI_max'] = pd.to_numeric(runs['Mutual Information.MI_max'], errors='coerce')
@@ -303,40 +285,6 @@ def apply_typing_code():
     param['Simulation.PDF path'] = param['Simulation.PDF path'].astype(str)
     pn.state.cache['db']['parameters'] = param
 
-    # Typage pour logs
-    logs = pn.state.cache['db']['logs']
-    logs['log'] = logs['log_path'].astype(str)
-    logs['hash'] = logs['hash'].astype(str)
-    logs['filename'] = logs['filename'].astype(str)
-    logs['Date_Execution'] = logs['Date_Execution'].astype(str)
-    pn.state.cache['db']['logs'] = logs
-
-def generate_typing_code(df, df_name="df"):
-    ''' Génère du code Python exécutable pour forcer le typage des colonnes dans pn.state.cache["db"][df_name] '''
-    lines = [
-        f"# Typage pour {df_name}",
-        f"{df_name} = pn.state.cache['db']['{df_name}']"
-    ]
-    
-    for col in df.columns:
-        dtype = df[col].dtype
-
-        if pd.api.types.is_integer_dtype(dtype):
-            lines.append(f"{df_name}['{col}'] = pd.to_numeric({df_name}['{col}'], errors='coerce').astype('Int64')")
-        elif pd.api.types.is_float_dtype(dtype):
-            lines.append(f"{df_name}['{col}'] = pd.to_numeric({df_name}['{col}'], errors='coerce')")
-        elif pd.api.types.is_bool_dtype(dtype):
-            lines.append(f"{df_name}['{col}'] = {df_name}['{col}'].astype(bool)")
-        elif pd.api.types.is_datetime64_any_dtype(dtype):
-            lines.append(f"{df_name}['{col}'] = pd.to_datetime({df_name}['{col}'], errors='coerce')")
-        else:
-            lines.append(f"{df_name}['{col}'] = {df_name}['{col}'].astype(str)")
-
-    # Réassigner dans le cache (non strictement nécessaire mais plus explicite)
-    lines.append(f"pn.state.cache['db']['{df_name}'] = {df_name}")
-
-    return "\n".join(lines)
-
 # ------------------------------------------------------------------------------
 #  Initialisation du dashboard
 # ------------------------------------------------------------------------------
@@ -379,17 +327,19 @@ def init_dashboard():
     )
 
     unique_model = ConfigUniqueModel(lv2_model=lvl2_filter)
+    execUniqueModel = ExecUniqueModel(unique_conf_model=unique_model)
 
     # Histogramme des temps des jobs
     task_Time_Histogramme = Tasks_Histogramme(
-        unique_conf_model = unique_model,
+        unique_run_model = execUniqueModel,
         noiseScale = noiseScale
     ) 
 
     panel_par_config = pn.Column(
+        ConfigUniqueSelector(name="One Configuration Selection", model= unique_model),
         task_Time_Histogramme,
         pn.pane.HTML("<h3> ✏️ Logs</h3>"),
-        #LogViewer(unique_conf_model=unique_model),
+        LogViewer(execUniqueModel=execUniqueModel),
         sizing_mode="stretch_width"
     )
 
@@ -700,7 +650,6 @@ class Lvl2_Filter_Model(param.Parameterized):
 class ConfigUniqueModel(param.Parameterized):
     lv2_model = param.ClassSelector(default=None, class_=Lvl2_Filter_Model)
     config = param.Selector(default=None, objects=[])
-    run_id = param.Selector(default=None, objects=[])
     options = param.Selector(default=None, objects=[])
 
     @property
@@ -720,152 +669,6 @@ class ConfigUniqueModel(param.Parameterized):
         if 'runs' not in db or self.config is None:
             return pd.DataFrame()
         return  db['runs'][db['runs']['Command_id']== self.config]        
-
-    @property
-    def df_tasks(self):
-        if self.run_id is None:
-            return pd.DataFrame()
-        db = pn.state.cache.get('db', {})
-        
-        # 1) Récupérer le run directement
-        df_runs = self.df_runs
-        if self.run_id not in df_runs.index:
-            return pd.DataFrame()
-        
-        # 2) Charger les tâches
-        table_name = f"{self.run_id}_tasks"
-        try:
-            df_tasks = load_table(table_name, fmt='json')
-            if df_tasks.empty:
-                return pd.DataFrame()
-        except Exception as e:
-            print(f"⚠️ Impossible de charger {table_name}: {e}")
-            return pd.DataFrame()
-        
-        # 3) Jointure avec les métadonnées
-        noise_cols = list(noise_label.values())
-        df_noise = df_runs.loc[[self.run_id], noise_cols]  # Sélectionne la ligne du run
-        
-        df_tasks = (df_tasks
-                    .set_index('RUN_id')
-                    .join(df_noise, how='left')
-                    .reset_index())
-        
-        return df_tasks
-
-    @property
-    def df_tasks(self):
-        db = pn.state.cache.get('db', {})
-        if self.config is None:
-            return pd.DataFrame()
-        
-        # 1) Récupérer les RUN_id du jour via les runs déjà filtrés
-        df_runs = self.df_runs
-        df_runs = df_runs[df_runs['Date_Execution'] == self.date]
-        run_ids = df_runs.index.unique().tolist()
-        if not run_ids:          # Évite une comparaison inutile
-           return pd.DataFrame()
-
-        # 2) Charger les tâches depuis les fichiers distants
-        all_tasks = []
-        for run_id in run_ids:
-            table_name = f"{run_id}_tasks"
-            try:
-                tasks = load_table(table_name, fmt='json')  # Les tâches sont en JSON Lines
-                if not tasks.empty:
-                    all_tasks.append(tasks)
-            except Exception as e:
-                # Gestion silencieuse des fichiers manquants ou erreurs de chargement
-                print(f"⚠️ Impossible de charger {table_name}: {e}")
-                continue
-
-        # 3) Concaténer et filtrer
-        if not all_tasks:
-            return pd.DataFrame()
-        
-        df_tasks = pd.concat(all_tasks, ignore_index=True)
-        
-        # 4) Jointure avec les bruits
-        noise_cols = list(noise_label.values())
-        df_noise = df_runs[noise_cols]
-        
-        df_tasks = (df_tasks
-                .set_index('RUN_id')
-                .join(df_noise, how='left')
-                .reset_index())
-        return df_tasks
-
-
-    @property
-    def df_logs(self):
-        db = pn.state.cache.get('db', {})
-        if 'logs' not in db or self.config is None:
-            return pd.DataFrame()
-        df_logs = db['logs']
-        log_hash = self.df_runs['log_hash'].unique() if not self.df_runs.empty else []
-        return  df_logs[df_logs['hash'].isin(log_hash)]
-
-    @property
-    def log(self):
-        df_logs = self.df_logs
-        if self.date is None or df_logs.empty:
-            return "```Pas de logs pour la sélection.```"
-        
-        match = df_logs[df_logs['Date_Execution'] == self.date]
-        if match.empty:
-            return "```Aucun log trouvé pour cette date.```"
-        
-        if 'log' in match.columns:
-            # Encapsuler le log dans un bloc de code Markdown
-            path = match.iloc[0]['log_path']
-            return f"```\n{self.__load_log(path)}\n```"
-        else:
-            return "```Colonne 'log' manquante.```"
-
-    def __load_log(self, log_path: str) -> str:
-        """Lit un fichier de log distant hébergé sur GitLab."""
-        CHUNK = 1024 * 1024  # 1 Mo
-        url = f"{GITLAB_PACKAGE_URL}{log_path}"  # log_path contient déjà le nom du fichier, ex : 'logs/LOG2740.log'
-
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-        }
-
-        all_data = BytesIO()
-        start = 0
-
-        while True:
-            headers["Range"] = f"bytes={start}-{start + CHUNK - 1}"
-            req = urllib.request.Request(url, headers=headers)
-            try:
-                with urllib.request.urlopen(req, timeout=None) as resp:
-                    data = resp.read()
-                    if not data:
-                        break
-                    all_data.write(data)
-                    if len(data) < CHUNK:
-                        break
-                    start += len(data)
-            except urllib.error.HTTPError as e:
-                if e.code == 416:  # fin du fichier
-                    break
-                elif e.code == 404:
-                    return "❌ Erreur : Le fichier de log est introuvable sur le serveur."
-                else:
-                    return f"❌ Erreur HTTP : {e.code} - {e.reason}"
-            except Exception as e:
-                return f"❌ Erreur inattendue : {str(e)}"
-
-        return all_data.getvalue().decode('utf-8', errors='replace')
-
-
-    @param.depends('config', watch=True)
-    def _update_run_id(self):
-        """Met à jour le run_id sélectionné avec le premier run disponible."""
-        if not self.df_runs.empty:
-            self.run_id = self.df_runs.index[0]  # Premier run_id disponible
-        else:
-            self.run_id = None
             
     @property
     def options_dates(self):
@@ -892,6 +695,11 @@ class ConfigUniqueModel(param.Parameterized):
             return '-'
         return self._df_configs_from_lvl2.at[self.config, 'Config_Alias']
 
+    def value_by_alias(self, alias):
+        id = self._find_id_by_alias(alias)
+        if id is not None:
+            self.value = id
+
     def config_by_alias(self, alias):
         id = self._find_id_by_alias(alias)
         if id is not None:
@@ -904,6 +712,109 @@ class ConfigUniqueModel(param.Parameterized):
         if self.config not in opts :
             self.config = opts[0] if opts else None
         self.options = opts
+
+
+class ExecUniqueModel(param.Parameterized):
+    """
+    Modèle pour gérer un exécution unique (lot de run de SNR différents) d'une configuration spécifique.
+    """
+    unique_conf_model = param.ClassSelector(class_=ConfigUniqueModel)
+    log_hash = param.Selector(default=None, objects=[])
+
+    @param.depends('unique_conf_model', watch=True)
+    def _update_exec(self):
+        """Met à jour le run_id sélectionné avec le premier run disponible."""
+        if not self.df.empty:
+            self.log_hash = self.df.index[0]  # Premier run_id disponible
+        else:
+            self.log_hash = None
+
+    @property
+    def df_runs(self):
+        """Renvoie le sous-ensemble des runs (SNR différents) pour la config sélectionnée."""
+        if self.unique_conf_model is None or self.log_hash is None:
+            return pd.DataFrame()
+        df = self.unique_conf_model.df_runs
+        return df[df['log_hash'] == self.log_hash]
+
+    @property
+    def df_tasks(self):
+        """Charge les tâches associées à un exec unique."""
+        if self.log_hash is None or self.unique_conf_model is None:
+            return pd.DataFrame()
+
+        table_name = f"{self.log_hash}"
+        try:
+            df_tasks = load_table(table_name, fmt='json')
+            if df_tasks.empty:
+                return pd.DataFrame()
+        except Exception as e:
+            print(f"⚠️ Impossible de charger {table_name}: {e}")
+            return pd.DataFrame()
+
+        # Ajoute les colonnes de bruit depuis le df_runs
+        df_runs = self.df
+        noise_cols = list(noise_label.values())
+        if self.log_hash not in df_runs.index:
+            return df_tasks
+
+        df_noise = df_runs.loc[[self.log_hash], noise_cols]
+        df_tasks = (df_tasks
+                    .set_index('RUN_id')
+                    .join(df_noise, how='left')
+                    .reset_index())
+        return df_tasks
+
+    @property
+    def log(self):
+        """Retourne le contenu du log associé au run_id (pas basé sur date)."""
+        if self.log_hash is None:
+            return "```Aucun run sélectionné.```"
+
+        df_runs = self.df
+        if self.log_hash not in df_runs.index:
+            return "```Run non trouvé dans les métadonnées.```"
+
+        row = df_runs.loc[self.log_hash]
+        if 'log_path' not in row or pd.isna(row['log_path']):
+            return "```Chemin du log non disponible.```"
+
+        path = row['log_path']
+        return f"```\n{self.__load_log(path)}\n```"
+
+    def __load_log(self) -> str:
+        """Lit un fichier distant hébergé sur GitLab."""
+        CHUNK = 1024 * 1024
+        url = f"{GITLAB_PACKAGE_URL}{log_path}"
+
+        headers = {"User-Agent": "Mozilla/5.0"}
+        all_data = BytesIO()
+        start = 0
+
+        while True:
+            headers["Range"] = f"bytes={start}-{start + CHUNK - 1}"
+            req = urllib.request.Request(url, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=None) as resp:
+                    data = resp.read()
+                    if not data:
+                        break
+                    all_data.write(data)
+                    if len(data) < CHUNK:
+                        break
+                    start += len(data)
+            except urllib.error.HTTPError as e:
+                if e.code == 416:
+                    break
+                elif e.code == 404:
+                    return "❌ Erreur : Fichier introuvable."
+                else:
+                    return f"❌ Erreur HTTP : {e.code} - {e.reason}"
+            except Exception as e:
+                return f"❌ Erreur inattendue : {str(e)}"
+
+        return all_data.getvalue().decode('utf-8', errors='replace')
+
 
 
 ##################################### Niveau 1 : Git et perf global ####################################
@@ -1536,22 +1447,21 @@ class ConfigUniqueSelector(pn.viewable.Viewer):
 # ------------------------------------------------------------------
 
 class LogViewer(pn.viewable.Viewer):
-    unique_conf_model = param.ClassSelector(default=None, class_=ConfigUniqueModel)
+    execUniqueModel = param.ClassSelector(default=None, class_=ExecUniqueModel)
     
     def __init__(self, **params):
         super().__init__(**params)
         
         self.output_pane = pn.pane.Markdown("Sélectionnez une configuration pour voir les fichiers.")
-        self.radioBoutton = ConfigUniqueSelector(name="One Configuration Selection", model= self.unique_conf_model)
         
         self.date_selector = pn.widgets.Select(name="Date d'exécution", options=[], visible=False)
         self.date_selector.param.watch(self._update_log_on_date_change, "value")
 
-    @param.depends('unique_conf_model.config', watch=True)
+    @param.depends('execUniqueModel.run_id', watch=True)
     def _update_dates(self, event=None):
         self.date_selector.options = self.unique_conf_model.options_dates
-        self.date_selector.value = self.unique_conf_model.date
-        self.output_pane.object = self.unique_conf_model.log
+        self.date_selector.value = self.execUniqueModel.date
+        self.output_pane.object = self.execUniqueModel.log
 
         if not self.unique_conf_model.date is None :
             self.date_selector.visible = True
@@ -1560,12 +1470,11 @@ class LogViewer(pn.viewable.Viewer):
 
     def _update_log_on_date_change(self, event=None):
         self.unique_conf_model.date = self.date_selector.value
-        self.output_pane.object = self.unique_conf_model.log
+        self.output_pane.object = self.execUniqueModel.log
 
     def __panel__(self):
         # Affichage du sélecteur et des onglets
         return pn.Column(
-            self.radioBoutton,
             self.date_selector,
             self.output_pane,
             sizing_mode="stretch_width")
@@ -1575,12 +1484,9 @@ class LogViewer(pn.viewable.Viewer):
 # Graphe de tâches
 # ------------------------------------------------------------------
 
-
-
-
 class Tasks_Histogramme(pn.viewable.Viewer):
     # Paramètres configurables
-    unique_conf_model = param.ClassSelector(class_=ConfigUniqueModel, doc="Selecteur de configurations uniques")
+    unique_exec_model = param.ClassSelector(class_=ExecUniqueModel, doc="Selecteur de configurations uniques")
     noiseScale = param.ClassSelector(class_=NoiseScale, doc="Choix de l'échelle de bruit par passage du label de la colonne")
 
     def __init__(self, **params):
@@ -1591,7 +1497,7 @@ class Tasks_Histogramme(pn.viewable.Viewer):
             pn.widgets.TooltipIcon(value="Affichage des temps des tâches en milli-seconde ou en %."), 
             self.button_time_perc,
             width=50)
-        self.graphPanel = pn.bind(self._plot_task_data, self.button_time_perc, self.unique_conf_model.param.date, self.noiseScale.param.value)
+        self.graphPanel = pn.bind(self._plot_task_data, self.button_time_perc, self.unique_exec_model.param.run_id, self.noiseScale.param.value)
         
     def changeIcon(self, event) :
         if event.new : 
@@ -1605,7 +1511,7 @@ class Tasks_Histogramme(pn.viewable.Viewer):
     def _plot_task_data(self, percent, index, noiseKey):
         if index is None :
             return pn.pane.Markdown(f"Histogramme des tâches : Sélectionner une configuration pour afficher.")
-        df = self.unique_conf_model.df_tasks
+        df = self.unique_exec_model.df_tasks
 
         if df.empty:
             self.button_time_perc.disabled = True
