@@ -669,15 +669,6 @@ class ConfigUniqueModel(param.Parameterized):
         if 'runs' not in db or self.config is None:
             return pd.DataFrame()
         return  db['runs'][db['runs']['Command_id']== self.config]        
-            
-    @property
-    def options_dates(self):
-        """Liste des dates d'exécution disponibles pour la configuration sélectionnée."""
-        df_logs = self.df_logs
-        if df_logs.empty or 'Date_Execution' not in df_logs.columns:
-            return []
-        # Conversion en str pour l'affichage (utile pour un widget Select)
-        return df_logs['Date_Execution'].astype(str).unique().tolist()
  
     @property
     def options_alias(self):
@@ -719,15 +710,38 @@ class ExecUniqueModel(param.Parameterized):
     Modèle pour gérer un exécution unique (lot de run de SNR différents) d'une configuration spécifique.
     """
     unique_conf_model = param.ClassSelector(class_=ConfigUniqueModel)
-    log_hash = param.Selector(default=None, objects=[])
 
-    @param.depends('unique_conf_model', watch=True)
+    log_hash = param.Selector(default=None, objects=[])   # valeur réelle (hash)
+
+    # ------------------------------------------------------------------
+    # Mise à jour automatique quand le modèle parent change
+    # ------------------------------------------------------------------
+    @param.depends('unique_conf_model.config', watch=True)
     def _update_exec(self):
-        """Met à jour le run_id sélectionné avec le premier run disponible."""
-        if not self.df.empty:
-            self.log_hash = self.df.index[0]  # Premier run_id disponible
-        else:
+        """Construit la liste des exécutions disponibles et met à jour le sélecteur."""
+        
+        if self.unique_conf_model.df_runs.empty:
+            self.param['log_hash'].objects = {None: None}
             self.log_hash = None
+            return
+
+        # DataFrame temporaire avec les infos nécessaires
+        opts = (self.unique_conf_model.df_runs[['log_hash', 'Date_Execution']]
+                .drop_duplicates()
+                .sort_values('Date_Execution')
+                .reset_index(drop=True))
+
+        # Construction du dictionnaire {label: valeur}
+        label_map = {
+            f"EXEC{i+1} - {ts.isoformat(' ', 'seconds')}": log_hash
+            for i, (log_hash, ts) in enumerate(zip(opts['log_hash'], opts['Date_Execution']))
+        }
+
+        # Mise à jour du sélecteur
+        self.param['log_hash'].objects = label_map
+
+        # Sélectionner la première exécution par défaut
+        self.log_hash = next(iter(label_map.values()), None)      
 
     @property
     def df_runs(self):
@@ -755,15 +769,18 @@ class ExecUniqueModel(param.Parameterized):
         # Ajoute les colonnes de bruit depuis le df_runs
         df_runs = self.df_runs
         noise_cols = list(noise_label.values())
-        if self.log_hash not in df_runs.index:
-            return df_tasks
 
-        df_noise = df_runs.loc[[self.log_hash], noise_cols]
+        df_noise = df_runs[df_runs['log_hash'] == self.log_hash][noise_cols]
         df_tasks = (df_tasks
                     .set_index('RUN_id')
-                    .join(df_noise, how='left')
+                    .join(df_noise, how='inner')
                     .reset_index())
         return df_tasks
+
+    @property
+    def options(self):
+        """Liste des dates d'exécution disponibles pour le run_id sélectionné."""
+        return self.unique_conf_model.exec_options
 
     @property
     def log(self):
@@ -1432,42 +1449,68 @@ class ConfigUniqueSelector(pn.viewable.Viewer):
             self.selector
         )
 
+
+class ExecUniqueSelector(pn.viewable.Viewer):
+    execUniqueModel = param.ClassSelector(default=None, class_=ExecUniqueModel)
+    
+    def __init__(self, **params):
+        super().__init__(**params)     
+            
+        self.exec_selector = pn.widgets.Select(name="Date d'exécution", options=[], visible=False)
+        self.exec_selector.param.watch(self._update_log_on_date_change, "value")
+
+    @param.depends('execUniqueModel.log_hash', watch=True)
+    def _sync_selector_from_model(self, event=None):
+        self.exec_selector.options = self.execUniqueModel.options_dates
+        self.exec_selector.value = self.execUniqueModel.date
+        if not self.unique_conf_model.date is None :
+            self.exec_selector.visible = True
+        else:
+            self.exec_selector.visible = False
+
+    @param.depends('execUniqueModel.log_hash', watch=True)
+    def _sync_selector_from_model(self, event=None):
+        opts = self.execUniqueModel.options_dates
+        self.selector.options = opts
+        if opts:
+            self.selector.value = opts[0] if opts else None
+            self.selector.disabled = False
+        else:
+            self.selector.value = None
+            self.selector.disabled = True
+
+    def _update_log_on_date_change(self, event=None):
+        self.unique_conf_model.date = self.exec_selector.value
+
+    def _sync_model_from_selector(self, event):
+        """Binde la sélection (log_hash) vers le execUniqueModel.log_hash."""
+        if event.new:
+            self.execUniqueModel.log_hash = event.new
+        else:
+            self.execUniqueModel.log_hash = None
+
+    def __panel__(self):
+        # Affichage du sélecteur et des onglets
+        return self.exec_selector
+
+
 # ------------------------------------------------------------------
 # Affichage des journeaux d'exec
 # ------------------------------------------------------------------
-
 class LogViewer(pn.viewable.Viewer):
     execUniqueModel = param.ClassSelector(default=None, class_=ExecUniqueModel)
     
     def __init__(self, **params):
-        super().__init__(**params)
-        
+        super().__init__(**params) 
         self.output_pane = pn.pane.Markdown("Sélectionnez une configuration pour voir les fichiers.")
-        
-        self.date_selector = pn.widgets.Select(name="Date d'exécution", options=[], visible=False)
-        self.date_selector.param.watch(self._update_log_on_date_change, "value")
 
     @param.depends('execUniqueModel.log_hash', watch=True)
-    def _update_dates(self, event=None):
-        self.date_selector.options = self.unique_conf_model.options_dates
-        self.date_selector.value = self.execUniqueModel.date
-        self.output_pane.object = self.execUniqueModel.log
-
-        if not self.unique_conf_model.date is None :
-            self.date_selector.visible = True
-        else:
-            self.date_selector.visible = False
-
-    def _update_log_on_date_change(self, event=None):
-        self.unique_conf_model.date = self.date_selector.value
+    def _update_log(self, event=None):
         self.output_pane.object = self.execUniqueModel.log
 
     def __panel__(self):
         # Affichage du sélecteur et des onglets
-        return pn.Column(
-            self.date_selector,
-            self.output_pane,
-            sizing_mode="stretch_width")
+        return self.output_pane,
 
 
 # ------------------------------------------------------------------
