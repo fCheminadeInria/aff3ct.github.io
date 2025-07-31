@@ -434,6 +434,7 @@ class NoiseScale (pn.viewable.Viewer) :
 ##################################
 
 class GitFilterModel(param.Parameterized):
+    """Modèle pour filtrer les données Git par plage de dates."""
     df_git = param.DataFrame()
     date_range = param.Tuple(default=(None, None), length=2, doc="Plage de dates pour filtrer")
     filtered = param.Parameter()
@@ -454,8 +455,8 @@ class GitFilterModel(param.Parameterized):
         df = self.df_git.copy()
         start, end = self.date_range
         if start and end:
-            start = start
-            end   = end
+            start = pd.to_datetime(start).floor('s')
+            end   = pd.to_datetime(end).ceil('s')
             df = df[(df['date'] >= start) & (df['date'] <= end)]
         return df
     
@@ -463,11 +464,11 @@ class GitFilterModel(param.Parameterized):
         return self.get_filtered_df().index.unique()
 
 class CommandFilterModel(param.Parameterized):
+    """Modèle pour filtrer les commandes sur la base du filtrage de Git et par commandes."""
     df_commands = param.DataFrame()
     git_filter = param.ClassSelector(class_=GitFilterModel) 
     code = param.ListSelector(default=[], objects=[])
     filtered = param.Parameter() # variable pour déclencher le filtrage
-    config_filter = param.Dict(default={})
 
     def __init__(self, **params):
         super().__init__(**params)
@@ -476,138 +477,23 @@ class CommandFilterModel(param.Parameterized):
         self.param['code'].objects = all_codes
         self.param['code'].default = all_codes 
         self.code = all_codes
+        self.__df_filtered()
 
-    @param.depends('config_filter', 'code', 'git_filter.filtered', watch=True)
+    @param.depends('git_filter.filtered', 'code', watch=True)
     def _trigger(self):
-        self.param.trigger('filtered')  
+        self.__df_filtered()
+        self.param.trigger('filtered')
 
-    def get_filtered_df(self):
+    def __df_filtered(self):
         sha1_valids = self.git_filter.get_sha1_valids()
         df_filtered = self.df_commands[self.df_commands['sha1'].isin(sha1_valids)]
+        # filtre par code
         if 'All' not in self.code:
             df_filtered = df_filtered[df_filtered['code'].isin(self.code)]
-        self.df_commands_intermediare = df_filtered
-        for col, values in self.config_filter.items():
-            if values:
-                df_filtered = df_filtered[df_filtered[col].isin(values)]
-        return df_filtered
+        self.df_filtered = df_filtered 
 
-class Research_config_filter(pn.viewable.Viewer):
-    command_filter = param.ClassSelector(class_=CommandFilterModel)
-
-    def __init__(self, **params):
-        super().__init__(**params)
-
-        df = self.command_filter.get_filtered_df()
-        df_filtered = df.drop(columns=['Config_Alias', 'param_id', 'meta_id', 'git_id', 'Command', 'Simulation.Code type (C)'], errors='ignore')
-
-        # Identification des familles de paramètres
-        family_columns = {}
-        for col in df_filtered.columns:
-            match = re.match(r"(\w+)\.(\w+)", col)
-            if match:
-                family_columns.setdefault(match.group(1), []).append(col)
-            else:
-                family_columns.setdefault("Autres", []).append(col)
-
-        # Création des widgets de filtrage
-        family_widgets = {}
-        for family, columns in family_columns.items():
-            widgets = []
-            for col in columns:
-                options = sorted(df[col].dropna().unique().tolist())
-                is_disabled = len(options) <= 1
-                widget = pn.widgets.MultiChoice(
-                    name=col,
-                    options=options,
-                    value=options,
-                    disabled=is_disabled,
-                    css_classes=["grayed-out"] if is_disabled else []
-                )
-                widget.param.watch(self._update_filterconfig, 'value')
-                widgets.append(widget)
-            family_widgets[family] = pn.Column(*widgets, name=family)
-
-        self.accordion_families = pn.Accordion(*[(f"{family}", widget) for family, widget in family_widgets.items()])
-        
-        self.filtre_actif= pn.pane.Markdown("", height=100)
-        self._config_filter_to_markdown()
-        
-        self.command_filter.param.watch(self._update_filter, 'filtered')
-
-    def _config_filter_to_markdown(self) -> str:
-        parts = []
-        for col_container in self.accordion_families.objects:
-            for widget in col_container.objects:
-                all_options = widget.options
-                selected = widget.value
-                deselected = sorted(set(all_options) - set(selected))
-                if deselected:
-                    parts.append(f"**{widget.name}** : {', '.join(map(str, deselected))}")
-
-        self.filtre_actif.object =  "\n\n".join(parts) if parts else "_Aucun filtre désactivé_"
-        
-    def __panel__(self):
-        
-        return pn.Card(
-            pn.Column(
-                pn.Card(
-                    pn.Column(
-                        self.filtre_actif, 
-                        styles={'overflow-y': 'auto'}
-                        ),
-                    title="🔍 Filtres actifs"
-                    ),
-                self.accordion_families, 
-                height=400,
-                styles={'overflow-y': 'auto'}),
-                title="🔍 Filtres de recherche",
-                collapsed=True
-                )
-            
-    def _get_current_filter(self):
-        """Construit un dictionnaire {colonne: valeurs sélectionnées} pour le filtre."""
-        return {
-            widget.name: widget.value
-            for col in self.accordion_families.objects
-            for widget in col.objects
-            if widget.value  # Ne garde que les filtres actifs
-        }
-
-    def _update_filter(self, event):
-        df = self.command_filter.get_filtered_df()
-        if df is None or df.empty:
-            return
-
-        # Appliquer le filtre actuel sur df_commands pour avoir le df filtré
-        df_filtered = df.drop(columns=['Config_Alias', 'param_id', 'meta_id', 'git_id', 'Command', 'Simulation.Code type (C)'], errors='ignore')
-
-        # Appliquer le filtre config_filter (ex: garder uniquement les valeurs sélectionnées pour chaque colonne)
-        for col, selected_values in self.command_filter.config_filter.items():
-            if selected_values:
-                df_filtered = df_filtered[df_filtered[col].isin(selected_values)]
-
-        # Met à jour les options et éventuellement les valeurs des widgets
-        for col_container in self.accordion_families.objects:
-            for widget in col_container.objects:
-                if widget.name in df_filtered.columns:
-                    options = sorted(self.command_filter.df_commands_intermediare[widget.name].dropna().unique().tolist())
-                    widget.options = options
-
-                    # Si la sélection actuelle n'est plus dans les options, on remet toute la sélection possible
-                    if not set(widget.value).issubset(set(options)):
-                        widget.value = options if options else []
-
-    def _update_filterconfig(self, event):
-        """Met à jour le filtre du modèle lors d’un changement utilisateur."""
-        
-        # Empêche la suppression complète des options
-        if len(event.new) < 1:
-            event.obj.value = event.old
-            return
-
-        self.command_filter.config_filter = {**self.command_filter.config_filter,    event.obj.name: event.new}
-        self._config_filter_to_markdown()
+    def get_filtered_df(self):
+        return self.df_filtered
 
 ################################################
 ## Gestion des données niveau 2 avec filtrage ##
@@ -835,8 +721,7 @@ class DateRangeFilter(pn.viewable.Viewer):
     def __init__(self, **params):
         super().__init__(**params)
         # Bornes extraites du DataFrame Git
-        db = pn.state.cache['db']
-        df = db ['git']
+        df = pn.state.cache['db']['git']
         
         start, end = df['date'].min(), df['date'].max()
         
@@ -870,14 +755,12 @@ class PerformanceByCommit(pn.viewable.Viewer):
         
         self.plot_throughput_pane = pn.pane.Plotly(sizing_mode='stretch_width')
         self.plot_latency_pane = pn.pane.Plotly(sizing_mode='stretch_width')
-        
-        df_commands = self.command_filter.df_commands
-        
+                
         db = pn.state.cache['db']
         
         # filtrage sur les commandes restantes et ajouts des colonnes de date
-        df = db['runs'][db['runs']['Command_id'].isin(df_commands.index)].merge(
-           df_commands[['sha1', 'code']], left_on='Command_id', right_index=True
+        df = db['runs'][db['runs']['Command_id'].isin(self.command_filter.df_commands.index)].merge(
+           self.command_filter.df_commands[['sha1', 'code']], left_on='Command_id', right_index=True
         ).merge(
             db['git'][['date']], left_on='sha1', right_index=True
         ).reset_index(drop=True)
@@ -1677,7 +1560,6 @@ class PanelCommit(pn.viewable.Viewer):
         db = pn.state.cache['db']
         self.indicators = GitIndicators(filter_model=self.git_filter)
         self.perfgraph = PerformanceByCommit(git_filter=self.git_filter, command_filter=self.command_filter)
-        self.research_config_filter = Research_config_filter(command_filter=self.command_filter)
 
     def __panel__(self):
         return pn.Column(
@@ -1685,7 +1567,6 @@ class PanelCommit(pn.viewable.Viewer):
             self.date_slider,
             self.table,
             self.code_selector,
-            self.research_config_filter,
             self.perfgraph,
             sizing_mode="stretch_width"
         )
