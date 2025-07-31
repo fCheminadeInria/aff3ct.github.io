@@ -792,7 +792,7 @@ class ExecUniqueModel(param.Parameterized):
     def __load_log(self) -> str:
         """Lit un fichier distant hébergé sur GitLab."""
         CHUNK = 1024 * 1024
-        url = f"{GITLAB_PACKAGE_URL}/logs/{self.log_hash}.log"
+        url = f"{GITLAB_PACKAGE_URL}logs/{self.log_hash}.log"
 
         headers = {"User-Agent": "Mozilla/5.0"}
         all_data = BytesIO()
@@ -1510,7 +1510,7 @@ class LogViewer(pn.viewable.Viewer):
 
     def __panel__(self):
         # Affichage du sélecteur et des onglets
-        return self.output_pane,
+        return self.output_pane
 
 
 # ------------------------------------------------------------------
@@ -1524,7 +1524,7 @@ class Tasks_Histogramme(pn.viewable.Viewer):
 
     def __init__(self, **params):
         super().__init__(**params)
-        self.button_time_perc = pn.widgets.Toggle(name='%', value=True)
+        self.button_time_perc = pn.widgets.Toggle(name='⏱', value=False)
         self.button_time_perc.param.watch(self.changeIcon, 'value')
         self.ListBouton = pn.Column(
             pn.widgets.TooltipIcon(value="Affichage des temps des tâches en milli-seconde ou en %."), 
