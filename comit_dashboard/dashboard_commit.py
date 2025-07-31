@@ -1030,10 +1030,8 @@ class FilteredTable(pn.viewable.Viewer):
 class GitIndicators(pn.viewable.Viewer):
     filter_model = param.ClassSelector(class_=GitFilterModel)
 
-    def __init__(self, df_git, df_commands, **params):
+    def __init__(self, **params):
         super().__init__(**params)
-        self.df_git = df_git
-        self.df_commands = df_commands
 
         self.commit_count = pn.indicators.Number(name="Commits historisés dans Git", value=0)
         self.git_version_count = pn.indicators.Number(name="Commits avec des données", value=0)
@@ -1046,10 +1044,11 @@ class GitIndicators(pn.viewable.Viewer):
     def _update(self, *events):
         df_filtered = self.filter_model.get_filtered_df()
         self.commit_count.value = len(df_filtered)
-
+        df_commands = pn.state.cache['db']['command']
         if not df_filtered.empty:
             valid_sha1 = df_filtered.index
-            count_valid_sha1 = self.df_commands[self.df_commands['sha1'].isin(valid_sha1)]['sha1'].nunique()
+            
+            count_valid_sha1 = df_commands[df_commands['sha1'].isin(valid_sha1)]['sha1'].nunique()
             self.git_version_count.value = count_valid_sha1
 
             latest_date = df_filtered['date'].max()
@@ -1676,7 +1675,7 @@ class PanelCommit(pn.viewable.Viewer):
         self.code_selector = CodeSelector(cmd_filter_model=self.command_filter)
         self.table = FilteredTable(filter_model=self.git_filter)
         db = pn.state.cache['db']
-        self.indicators = GitIndicators(df_git=db['git'], df_commands=db['command'], filter_model=self.git_filter)
+        self.indicators = GitIndicators(filter_model=self.git_filter)
         self.perfgraph = PerformanceByCommit(git_filter=self.git_filter, command_filter=self.command_filter)
         self.research_config_filter = Research_config_filter(command_filter=self.command_filter)
 
