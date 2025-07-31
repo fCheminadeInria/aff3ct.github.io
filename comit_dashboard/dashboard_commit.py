@@ -771,7 +771,7 @@ class PerformanceByCommit(pn.viewable.Viewer):
         
         self.tabs = pn.Tabs(
             ('⏱️ Latence', self.plot_latency_pane),
-            ('⚡ Débit', self.plot_throughput_pane),
+            ('🛜 Débit', self.plot_throughput_pane),
         )
         
     def _update_all(self, *events):
@@ -1011,7 +1011,7 @@ class TableConfig(pn.viewable.Viewer):
         self.lv2_filter.param.watch(self._update_table, 'value')
 
     def __panel__(self):
-        return pn.Accordion( ("☰ Configurations sélectionnées", self.tab))
+        return pn.Accordion( ("🧾 Configurations sélectionnées", self.tab))
     
     def _update_table(self, event=None):
         self.tab.object = self._prepare()
