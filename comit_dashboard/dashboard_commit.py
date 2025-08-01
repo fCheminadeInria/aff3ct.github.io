@@ -319,19 +319,13 @@ def init_dashboard():
     lvl2_filter = Lvl2_Filter_Model(command_filter=command_filter)
     config_panel = ConfigPanel(lv2_model=lvl2_filter)
 
-    mi_panel = pn.Column(
-        Mutual_information_Panels(lv2_model=lvl2_filter, noiseScale=noiseScale),
-        scroll=True, height=700
-    )
-
     panelConfig = pn.Row(
         pn.Column(
             config_panel,
             TableConfig(lv2_filter=lvl2_filter, meta=False),
             pn.Tabs(
                 ('BER/FER', pn.bind(plot_performance_metrics_plotly,
-                                   lvl2_filter.param.value, noiseScale.param.value)),
-                ('Mutual information', mi_panel)
+                                   lvl2_filter.param.value, noiseScale.param.value))
             ),
             sizing_mode="stretch_width"
         )
@@ -1185,110 +1179,6 @@ class Panel_graph_envelope(pn.viewable.Viewer):
             ),
             yaxis=dict(
                 title=self.Ytitle,
-            ),
-            legend_title="Configurations",
-            template="plotly_white",
-            height=600,
-            showlegend=True,
-            margin=dict(t=70, b=50, l=50, r=10)
-        )
-        
-        return  pn.pane.Plotly(fig, sizing_mode="stretch_width")
-
-class Mutual_information_Panels (pn.viewable.Viewer) :
-    # Paramètres configurables
-    lv2_model = param.ClassSelector(default=None, class_=Lvl2_Filter_Model)
-    noiseScale = param.ClassSelector(default=None, class_=pn.viewable.Viewer,doc="Choix de l'échelle de bruit par passage du label de la colonne")
-
-    def __init__(self, **params):
-        super().__init__(**params)
-        
-        self.colors = itertools.cycle(px.colors.qualitative.Plotly)
-        
-        df =self.lv2_model.df_runs_filtred
-        cols = ["Mutual Information.MI", "Mutual Information.MI_min", "Mutual Information.MI_max", "Mutual Information.n_trials"]
-        df = df [ df[cols].notnull().any(axis=1) ]
-        
-        self.plot_mutual_information = Panel_graph_envelope(
-            lv2_model = self.lv2_model,
-            df = df,
-            lab   ="Mutual Information.MI", 
-            labmin="Mutual Information.MI_min", 
-            labmax="Mutual Information.MI_max", 
-            Ytitle = "Information mutuelle",
-            noiseScale = self.noiseScale
-        )
-        
-        self.ListBouton = pn.Column(
-            pn.widgets.TooltipIcon(value="Seuls les configuration avec des valeurs pour \"Mutual Information.MI\", \"Mutual Information.MI_min\", \"Mutual Information.MI_max\", \"Mutual Information.n_trials\" sont affichées. "), 
-            width=50)
-        self.mutual_information_ntrial = pn.bind(self._plottrial, self.lv2_model.param.value, self.noiseScale.param.value)
-
-    def __panel__(self):
-        return pn.Column(
-            pn.widgets.TooltipIcon(value="Seuls les configuration avec des valeurs pour \"Mutual Information.MI\", \"Mutual Information.MI_min\", \"Mutual Information.MI_max\" sont affichées. "), 
-            pn.Row(self.plot_mutual_information),
-            pn.Row(self.ListBouton, self.mutual_information_ntrial)
-        )
-    
-    def _plottrial(self, index, noiseKey):
-        ''' graphe de Nombre d'essais'''
-        df_filtred = self.lv2_model.df_runs_filtred
-        
-        # Si pas de données de tâches pour les configurations sélectionnées
-        if df_filtred.empty:
-            return pn.pane.Markdown(f"Mutual Information : Pas de données complètes d'information mutuelle disponibles pour les configurations sélectionnées.")
-
-        # Générer une palette de couleurs automatiquement selon le nombre de configurations
-        fig = go.Figure()
-        
-        # Ajouter une trace pour chaque configuration et tâche
-        for i, config in enumerate(index):
-            # Filtrer les données pour chaque configuration
-            matching_runs = df_filtred.index[df_filtred['Command_id'] == config]
-            config_data = df_filtred.loc[matching_runs]
-            
-            # Vérifier que les colonnes existent et ne sont pas toutes NaN
-            if noiseKey not in config_data.columns or "Mutual Information.n_trials" not in config_data.columns:
-                continue  # Colonnes manquantes
-
-            config_data = config_data.dropna(subset=[noiseKey, "Mutual Information.n_trials"])
-
-            if config_data.empty:
-                continue  # Plus de données après nettoyage
-            
-            snr = config_data[noiseKey]
-            n_trials = config_data["Mutual Information.n_trials"]         
-                
-            fig.add_trace(go.Scatter(
-                x=snr, y=n_trials,
-                mode='markers',
-                line=dict(width=2, color=next(self.colors)),
-                name=f"Nombre d'essais - {config}"  
-            ))
-        
-        if not fig.data:
-            return pn.pane.Markdown(
-                "Mutual Information : Données insuffisantes (valeurs NaN ou colonnes manquantes) pour les configurations sélectionnées."
-            )
-                
-        # Configuration de la mise en page avec Range Slider et Range Selector
-        fig.update_layout(
-            title="Nombre d'essais en fonction du SNR pour chaque configuration",
-            xaxis=dict(
-                title=f"Niveau de Bruit (SNR) : {noiseKey}",
-                rangeslider=dict(visible=True),
-                rangeselector=dict(
-                    buttons=list([
-                        dict(count=1, label="1dB", step="all", stepmode="backward"),
-                        dict(count=5, label="5dB", step="all", stepmode="backward"),
-                        dict(count=10, label="10dB", step="all", stepmode="backward"),
-                        dict(step="all")
-                    ])
-                )
-            ),
-            yaxis=dict(
-                title="Nombre d'essais",
             ),
             legend_title="Configurations",
             template="plotly_white",
