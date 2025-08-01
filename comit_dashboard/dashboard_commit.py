@@ -337,6 +337,7 @@ def init_dashboard():
 
     panel_par_config = pn.Column(
         ConfigUniqueSelector(name="One Configuration Selection", model= unique_model),
+        ExecUniqueSelector(name="Selection de l'execution",execUniqueModel= execUniqueModel),
         task_Time_Histogramme,
         pn.pane.HTML("<h3> ✏️ Logs</h3>"),
         LogViewer(execUniqueModel=execUniqueModel),
@@ -616,6 +617,7 @@ class ExecUniqueModel(param.Parameterized):
                 .drop_duplicates()
                 .sort_values('Date_Execution')
                 .reset_index(drop=True))
+        opts['Date_Execution'] = pd.to_datetime(opts['Date_Execution'], errors='coerce')
 
         # Construction du dictionnaire {label: valeur}
         label_map = {
@@ -666,7 +668,12 @@ class ExecUniqueModel(param.Parameterized):
     @property
     def options(self):
         """Liste des dates d'exécution disponibles pour le run_id sélectionné."""
-        return self.unique_conf_model.exec_options
+        return self.param['log_hash'].objects.values
+
+    @property
+    def label_map(self):
+        return self.param['log_hash'].objects
+
 
     @property
     def log(self):
@@ -1308,7 +1315,7 @@ class ConfigUniqueSelector(pn.viewable.Viewer):
     def _sync_model_from_selector(self, event):
         """Binde la sélection (alias) vers le model.value."""
         if event.new:
-            self.model.value_by_alias(event.new)
+            self.model.config_by_alias(event.new)
         else:
             self.model.value = None
 
@@ -1331,49 +1338,59 @@ class ConfigUniqueSelector(pn.viewable.Viewer):
             self.selector
         )
 
-
 class ExecUniqueSelector(pn.viewable.Viewer):
     execUniqueModel = param.ClassSelector(default=None, class_=ExecUniqueModel)
-    
+
     def __init__(self, **params):
-        super().__init__(**params)     
-            
-        self.exec_selector = pn.widgets.Select(name="Date d'exécution", options=[], visible=False)
-        self.exec_selector.param.watch(self._update_log_on_date_change, "value")
+        super().__init__(**params)
+
+        self._syncing = False  # évite les boucles de synchronisation
+
+        self.exec_selector = pn.widgets.Select(
+            name="Choix d'exécution",
+            options=[],
+            visible=False
+        )
+
+        self.exec_selector.param.watch(self._sync_model_from_selector, "value")
 
     @param.depends('execUniqueModel.log_hash', watch=True)
-    def _sync_selector_from_model(self, event=None):
-        self.exec_selector.options = self.execUniqueModel.options_dates
-        self.exec_selector.value = self.execUniqueModel.date
-        if not self.unique_conf_model.date is None :
-            self.exec_selector.visible = True
-        else:
-            self.exec_selector.visible = False
+    def _sync_selector_from_model(self):
+        """Synchronise le widget avec le modèle."""
+        if self._syncing or self.execUniqueModel is None:
+            return
 
-    @param.depends('execUniqueModel.log_hash', watch=True)
-    def _sync_selector_from_model(self, event=None):
-        opts = self.execUniqueModel.options_dates
-        self.selector.options = opts
-        if opts:
-            self.selector.value = opts[0] if opts else None
-            self.selector.disabled = False
-        else:
-            self.selector.value = None
-            self.selector.disabled = True
+        self._syncing = True
+        try:
+            label_map = self.execUniqueModel.label_map  # dict {label: log_hash}
+            self.exec_selector.options = list(label_map.keys())
 
-    def _update_log_on_date_change(self, event=None):
-        self.unique_conf_model.date = self.exec_selector.value
+            # Retrouver le label associé à la valeur courante
+            current_hash = self.execUniqueModel.log_hash
+            label_selected = next((label for label, val in label_map.items()
+                                   if val == current_hash), None)
+
+            self.exec_selector.value = label_selected
+            self.exec_selector.visible = bool(label_map)
+
+        finally:
+            self._syncing = False
 
     def _sync_model_from_selector(self, event):
-        """Binde la sélection (log_hash) vers le execUniqueModel.log_hash."""
-        if event.new:
-            self.execUniqueModel.log_hash = event.new
-        else:
-            self.execUniqueModel.log_hash = None
+        """Met à jour le modèle à partir de la sélection utilisateur."""
+        if self._syncing or self.execUniqueModel is None:
+            return
+
+        self._syncing = True
+        try:
+            selected_label = event.new
+            self.execUniqueModel.log_hash = self.execUniqueModel.label_map.get(selected_label, None)
+        finally:
+            self._syncing = False
 
     def __panel__(self):
-        # Affichage du sélecteur et des onglets
         return self.exec_selector
+
 
 
 # ------------------------------------------------------------------
