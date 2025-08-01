@@ -1510,43 +1510,61 @@ def plot_performance_metrics_plotly(configs, noiseScale):
         return pn.pane.Markdown("Veuillez sélectionner au moins une configuration pour afficher les performances.")
     db = pn.state.cache['db']
     filtered_df_runs = db['runs'][db['runs']["Command_id"].isin(configs)]
+    
+        
+    filtered_df_runs = filtered_df_runs.merge(
+        db['command'][['sha1']],  # on ne garde que la colonne sha1
+        left_on='Command_id',
+        right_index=True,
+        how='left'
+    )
+    
     if filtered_df_runs.empty:
         return pn.pane.Markdown("Pas de données de performance disponibles pour les configurations sélectionnées.")
     
     filtered_df_runs = filtered_df_runs.sort_values(by=noiseScale, ascending=True)
     
     fig = go.Figure()
-    
-    # Générer une palette de couleurs automatiquement selon le nombre de configurations
-    colors = px.colors.qualitative.Plotly[:len(configs)]  # Choisir des couleurs depuis Plotly, ajustées à la taille de configs
-    
-    for i, config in enumerate(configs):
-        config_data = filtered_df_runs.loc[filtered_df_runs["Command_id"] == config]
-        snr = config_data[noiseScale]
-        ber = config_data['Bit Error Rate (BER) and Frame Error Rate (FER).BER']
-        fer = config_data['Bit Error Rate (BER) and Frame Error Rate (FER).FER']
-        
+
+    # Ajouter la colonne clé (couple Command_id + sha1)
+    filtered_df_runs['cmd_sha'] = (
+        filtered_df_runs['Command_id'].astype(str) + ' - ' +
+        filtered_df_runs['sha1'].str[:7]
+    )
+
+    grouped = filtered_df_runs.groupby('cmd_sha')
+    colors = px.colors.qualitative.Plotly[:len(grouped)]
+
+    for (key, grp), color in zip(grouped, colors):
+        snr = grp[noiseScale]
+        ber = grp['Bit Error Rate (BER) and Frame Error Rate (FER).BER']
+        fer = grp['Bit Error Rate (BER) and Frame Error Rate (FER).FER']
+
         # Trace BER (ligne pleine avec marqueurs)
         fig.add_trace(go.Scatter(
-            x=snr, y=ber, mode='lines+markers', name=f"BER - {config}",
-            line=dict(width=2, color=colors[i]),
+            x=snr, y=ber,
+            mode='lines+markers',
+            name=f"BER - {key}",
+            line=dict(width=2, color=color),
             marker=dict(symbol='circle', size=6)
         ))
-        
+
         # Trace FER (ligne pointillée avec marqueurs)
         fig.add_trace(go.Scatter(
-            x=snr, y=fer, mode='lines+markers', name=f"FER - {config}",
-            line=dict(width=2, dash='dash', color=colors[i]),
+            x=snr, y=fer,
+            mode='lines+markers',
+            name=f"FER - {key}",
+            line=dict(width=2, dash='dash', color=color),
             marker=dict(symbol='x', size=6)
         ))
-    
+
     
     # Configuration de la mise en page avec Range Slider et Range Selector
     fig.update_layout(
-        title="BER et FER en fonction du SNR pour chaque configuration",
+        title="BER et FER en fonction du SNR pour chaque couple (Command, Commit)",
         xaxis=dict(
             title=f"Niveau de Bruit (SNR) : {noiseScale}",
-            rangeslider=dict(visible=True),  # Activation du Range Slider
+            rangeslider=dict(visible=True),
             rangeselector=dict(
                 buttons=list([
                     dict(count=1, label="1dB", step="all", stepmode="backward"),
@@ -1556,11 +1574,8 @@ def plot_performance_metrics_plotly(configs, noiseScale):
                 ])
             )
         ),
-        yaxis=dict(
-            title="Taux d'Erreur",
-            type='log'
-        ),
-        legend_title="Configurations",
+        yaxis=dict(title="Taux d'Erreur", type='log'),
+        legend_title="Command - Commit",
         template="plotly_white",
         height=600,
         showlegend=True,
