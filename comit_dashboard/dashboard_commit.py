@@ -106,6 +106,17 @@ def load_data_sync() -> None:
     pn.state.cache['db'] = db
 
     apply_typing_code()
+    
+    if 'runs' in db:
+        runs_df = db['runs']
+        if 'Command_id' in runs_df.columns and 'log_hash' in runs_df.columns:
+            log_counts = runs_df.groupby('Command_id')['log_hash'].nunique().sort_values(ascending=False)
+            print(log_counts)
+        else:
+            print("Colonnes 'Command_id' ou 'log_hash' manquantes.")
+    else:
+        print("Aucune table 'runs' dans pn.state.cache['db'].")
+        
     print("✅ load_data_sync() terminé")
     
 # ------------------------------------------------------------------------------
@@ -964,7 +975,6 @@ class ConfigPanel(pn.viewable.Viewer):
 
     def __init__(self, **params):
         super().__init__(**params)
-
         self.config_selector = pn.widgets.MultiChoice(name="Sélectionnez les configurations", options=[])
         self.select_all_button = pn.widgets.Button(name="Tout sélectionner", button_type="success")
         self.clear_button = pn.widgets.Button(name="Tout désélectionner", button_type="warning")
