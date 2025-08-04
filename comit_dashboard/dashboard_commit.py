@@ -106,16 +106,6 @@ def load_data_sync() -> None:
     pn.state.cache['db'] = db
 
     apply_typing_code()
-    
-    if 'runs' in db:
-        runs_df = db['runs']
-        if 'Command_id' in runs_df.columns and 'log_hash' in runs_df.columns:
-            log_counts = runs_df.groupby('Command_id')['log_hash'].nunique().sort_values(ascending=False)
-            print(log_counts)
-        else:
-            print("Colonnes 'Command_id' ou 'log_hash' manquantes.")
-    else:
-        print("Aucune table 'runs' dans pn.state.cache['db'].")
         
     print("✅ load_data_sync() terminé")
     
@@ -332,20 +322,15 @@ def init_dashboard():
     )
 
     unique_model = ConfigUniqueModel(lv2_model=lvl2_filter)
-    execUniqueModel = ExecUniqueModel(unique_conf_model=unique_model)
 
-    # Histogramme des temps des jobs
-    task_Time_Histogramme = Tasks_Histogramme(
-        unique_exec_model = execUniqueModel,
-        noiseScale = noiseScale
-    ) 
 
     panel_par_config = pn.Column(
         ConfigUniqueSelector(name="One Configuration Selection", model= unique_model),
-        ExecUniqueSelector(name="Selection de l'execution",execUniqueModel= execUniqueModel),
-        task_Time_Histogramme,
-        pn.pane.HTML("<h3> ✏️ Logs</h3>"),
-        LogViewer(execUniqueModel=execUniqueModel),
+        pn.Row(
+            ExecutionColumn(exec_model=ExecUniqueModel(unique_conf_model=unique_model), name="Execution 1", noise_scale=noiseScale),
+            ExecutionColumn(exec_model=ExecUniqueModel(unique_conf_model=unique_model), name="Execution 2", noise_scale=noiseScale),
+            sizing_mode="stretch_width"
+        ),
         sizing_mode="stretch_width"
     )
 
@@ -1290,6 +1275,37 @@ class ExecUniqueSelector(pn.viewable.Viewer):
 
     def __panel__(self):
         return self.exec_selector
+
+
+# ------------------------------------------------------------------
+# Affichage d'une execution
+# ------------------------------------------------------------------
+class ExecutionColumn(pn.viewable.Viewer):
+    def __init__(self, name, exec_model, noise_scale, **params):
+        super().__init__(**params)
+
+        # Sélecteur d'exécution
+        self.exec_selector = ExecUniqueSelector(name=name, execUniqueModel=exec_model)
+
+        # Histogramme des tâches
+        self.histogram = Tasks_Histogramme(
+            unique_exec_model=exec_model,
+            noiseScale=noise_scale
+        )
+
+        # Visualiseur de logs
+        self.log_viewer = LogViewer(execUniqueModel=exec_model)
+
+        self.layout = pn.Column(
+            self.exec_selector,
+            self.histogram,
+            pn.pane.HTML(f"<h3> ✏️ Logs - {name}</h3>"),
+            self.log_viewer,
+            sizing_mode="stretch_width"
+        )
+
+    def __panel__(self):
+        return self.layout
 
 
 
