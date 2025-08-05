@@ -104,6 +104,8 @@ def load_data_sync() -> None:
     df = db['command'][['Config_Alias']].drop_duplicates()
     db['config_aliases'] = df['Config_Alias'].to_dict()
 
+    db['exec'].set_index('log_hash', inplace=True)
+
     pn.state.cache['db'] = db
 
     apply_typing_code()
@@ -354,6 +356,15 @@ class CommandFilterModel(param.Parameterized):
 
     def get_filtered_df(self):
         return self.df_filtered
+    
+    @property
+    def df_exec(self):
+        """Renvoie les executions filtrées par le modèle."""
+        db = pn.state.cache['db']
+        df = self.df_filtered        
+        exec = db['exec'][db['exec']['Command_id'].isin(df.index)]
+        exec = db['exec'][db['exec']['sha1'].isin(df['sha1'].values)]
+        return exec
 
 ################################################
 ## Gestion des données niveau 2 avec filtrage ##
@@ -396,6 +407,14 @@ class Lvl2_Filter_Model(param.Parameterized):
         selection = selection[selection['sha1'].isin(self.value_sha1)]
         
         return selection
+
+    @property
+    def df_exec(self):
+        """DataFrame des exécutions (runs) filtrées par le niveau 2."""
+        exec = self.df_exec
+        exec = exec[exec['Command_id'].isin(self.value_commands)]
+        exec = exec[exec['sha1'].isin(self.value_sha1)]
+        return exec
 
     @property
     def df_runs(self):
