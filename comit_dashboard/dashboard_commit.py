@@ -97,11 +97,11 @@ def load_data_sync() -> None:
     # Alias
     db['command']['Config_Alias'] = (
         db['command'].index.astype(str) + " : " +
-        db['command']['Command_short'].astype(str) + "_" +
-        db['command']['sha1'].astype(str)
+        db['command']['Command_short'].astype(str)
     )
 
-    db['config_aliases'] = dict(zip(db['command'].index, db['command']['Config_Alias']))
+    df = db['command'][['Config_Alias']].drop_duplicates()
+    db['config_aliases'] = df['Config_Alias'].to_dict()
 
     pn.state.cache['db'] = db
 
@@ -547,7 +547,7 @@ class ConfigUniqueModel(param.Parameterized):
  
     @property
     def options_alias(self):
-        return self._df_configs_from_lvl2['Config_Alias'].tolist()
+        return self._df_configs_from_lvl2['Config_Alias'].unique().tolist()
 
     def _find_id_by_alias(self, alias):
         df = self._df_configs_from_lvl2
@@ -559,7 +559,7 @@ class ConfigUniqueModel(param.Parameterized):
     def alias(self):
         if self.config is None or self.config not in self._df_configs_from_lvl2.index:
             return '-'
-        return self._df_configs_from_lvl2.at[self.config, 'Config_Alias']
+        return self._df_configs_from_lvl2.at[self.config, 'Config_Alias'].iloc(0)
 
     def value_by_alias(self, alias):
         id = self._find_id_by_alias(alias)
