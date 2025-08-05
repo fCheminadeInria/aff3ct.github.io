@@ -126,7 +126,6 @@ def apply_typing_code():
 
     # Typage pour runs
     runs = pn.state.cache['db']['runs']
-    runs['log_path'] = runs['log_hash'].astype(str)
     runs['Date_Execution'] = pd.to_datetime(runs['Date_Execution'], errors='coerce')
     runs['Bit Error Rate (BER) and Frame Error Rate (FER).BE'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).BE'], errors='coerce').astype('Int64')
     runs['Bit Error Rate (BER) and Frame Error Rate (FER).BER'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).BER'], errors='coerce')
@@ -305,16 +304,15 @@ def init_dashboard():
     panelCommit = PanelCommit(command_filter=command_filter, git_filter=git_filter)
 
     lvl2_filter = Lvl2_Filter_Model(command_filter=command_filter)
-    config_panel = ConfigPanel(lv2_model=lvl2_filter)
+    config_panel = Lvl2_ConfigPanel(lv2_model=lvl2_filter)
 
     panelConfig = pn.Row(
         pn.Column(
             config_panel,
             TableConfig(lv2_filter=lvl2_filter, meta=False),
+            Lvl2_Git_Selector(lv2_model=lvl2_filter),
             pn.Tabs(
-                ('BER/FER', pn.bind(plot_performance_metrics_plotly,
-                                   lvl2_filter.param.value, noiseScale.param.value))
-            ),
+                ('BER/FER', PerformanceBERFERPlot(lvl2_model = lvl2_filter, noise_scale_param=noiseScale))),
             sizing_mode="stretch_width"
         )
     )
@@ -490,33 +488,59 @@ class CommandFilterModel(param.Parameterized):
 
 class Lvl2_Filter_Model(param.Parameterized):
     command_filter = param.ClassSelector(class_=CommandFilterModel)
-    value = param.List(default=[])
-    df = param.DataFrame()
-    options = param.DataFrame(default=pd.DataFrame(columns=["Config_Alias"]), doc="DataFrame contenant les options de filtrage")
-
+    value_commands = param.List(default=[])          # liste d’index (command_id) sélectionnés via les commits
+    options = param.DataFrame()             # DataFrame filtré par le niveau 1 : index = command_id, colonnes = ['sha1', 'Config_Alias', ...]
+    value_sha1 = param.List(default=[])          # liste d’index (sha1) sélectionnés via les commits
+    
     def __init__(self, **params):
         super().__init__(**params)
-        self._update_df()
+        # On observe le DataFrame filtré du niveau 1
+        self.value_commands = []
+        self.value_sha1 = []
         self._update_from_lvl1()
-        self.command_filter.param.watch(self._update_from_lvl1, 'filtered')
-        self.param.watch(self._update_df, 'value')
-        
+
+    @param.depends('command_filter.filtered', watch=True)
     def _update_from_lvl1(self, *events):
-        df_filtered = self.command_filter.get_filtered_df()
-        self.value = [v for v in self.value if v in df_filtered.index]
-        self.options = df_filtered[['Config_Alias']]
+        """Met à jour les options et la sélection en fonction du filtrage du niveau 1."""
+        self.options = self.command_filter.get_filtered_df().copy()
+
+        # Nettoie la sélection courante
+        self.value_commands = list(dict.fromkeys(
+            v for v in self.value_commands if v in self.options.index
+        ))
+        self.value_sha1 = list(dict.fromkeys(
+            v for v in self.value_sha1 if v in self.options['sha1'].values
+        ))
 
     @property
-    def df_runs_filtred(self):
-        df_runs = pn.state.cache['db']['runs']
-        df_runs = df_runs[df_runs["Command_id"].isin(self.value)]
-        return  df_runs
-            
-    def _update_df(self, *events):
-        self.df = self.command_filter.get_filtered_df().loc[self.value]     
-     
+    def df(self):
+        """DataFrame filtré par le niveau 2 : index = command_id, colonnes = ['sha1', 'Config_Alias', ...]"""
+        if self.options.empty:
+            return pd.DataFrame()
+        
+        # Intersection entre command_id sélectionnés et sha1 sélectionnés
+        selection = self.options.loc[self.value_commands]
+        selection = selection[selection['sha1'].isin(self.value_sha1)]
+        
+        return selection
+
+    @property
+    def df_runs(self):
+        runs = pn.state.cache['db']['runs']  
+        
+        sel = runs[runs["Command_id"].isin(self.df.index)]
+        # ajoute la colonne sha1 issue du DataFrame self.df
+        sel = sel.merge(
+            self.df[['sha1']],
+            left_on='Command_id',
+            right_index=True,
+            how='left'
+        )
+        return sel
+
     def reset(self):
-        self.value = []
+        self.value_commands = []
+        self._update_from_lvl1()
 
 ##################################################
 ## Gestion des données niveau 3 : config unique ##
@@ -557,9 +581,17 @@ class ConfigUniqueModel(param.Parameterized):
         return matched[0] if len(matched) > 0 else None
 
     def alias(self):
-        if self.config is None or self.config not in self._df_configs_from_lvl2.index:
+        if (
+            self.config is None or
+            self.config not in self._df_configs_from_lvl2.index
+        ):
             return '-'
-        return self._df_configs_from_lvl2.at[self.config, 'Config_Alias'].iloc(0)
+        
+        aliases = self._df_configs_from_lvl2.loc[self.config, 'Config_Alias']
+        
+        if isinstance(aliases, pd.Series):
+            return aliases.iloc[0]  # ou `return list(aliases)` si tu veux tout renvoyer
+        return aliases
 
     def value_by_alias(self, alias):
         id = self._find_id_by_alias(alias)
@@ -571,7 +603,7 @@ class ConfigUniqueModel(param.Parameterized):
         if id is not None:
             self.config = id
 
-    @param.depends('lv2_model.df', watch=True)
+    @param.depends('lv2_model.value_commands', 'lv2_model.value_sha1', watch=True)
     def _on_lvl2_df_change(self):
         opts = self._df_configs_from_lvl2.index.tolist()
         # Initialise la valeur avec le command_id correspondant au premier alias
@@ -947,7 +979,7 @@ class GitIndicators(pn.viewable.Viewer):
 
 MAX_SELECTION = 10
 
-class ConfigPanel(pn.viewable.Viewer):
+class Lvl2_ConfigPanel(pn.viewable.Viewer):
     lv2_model = param.ClassSelector(class_=Lvl2_Filter_Model)
 
     def __init__(self, **params):
@@ -961,7 +993,6 @@ class ConfigPanel(pn.viewable.Viewer):
         self.clear_button.on_click(self.clear_configs)
 
         self.config_selector.param.watch(self._check_selection_limit, 'value')
-        self.lv2_model.param.watch(self._update_options, 'options')
         self._update_options()
         
     def __panel__(self):
@@ -972,6 +1003,7 @@ class ConfigPanel(pn.viewable.Viewer):
             self.dialog
         )
 
+    @param.depends('lv2_model.options', watch=True)
     def _update_options(self, *events):
         options = self.lv2_model.options["Config_Alias"].tolist()
         self.config_selector.options = options
@@ -983,7 +1015,8 @@ class ConfigPanel(pn.viewable.Viewer):
             self.config_selector.value = event.old
             self.dialog.open(f"❌ Maximum {MAX_SELECTION} configurations.")
         else:
-            self.lv2_model.value = self.lv2_model.options[self.lv2_model.options["Config_Alias"].isin(selected)].index.tolist()
+            # Met à jour la liste des commandes sélectionnées dans le modèle en recupérant l'index pour l'alias
+            self.lv2_model.value_commands = self.lv2_model.options[self.lv2_model.options["Config_Alias"].isin(selected)].index.tolist()
 
     def select_all_configs(self, event=None):
         if len(self.config_selector.options) > MAX_SELECTION:
@@ -993,7 +1026,58 @@ class ConfigPanel(pn.viewable.Viewer):
 
     def clear_configs(self, event=None):
         self.config_selector.value = []
-      
+
+class Lvl2_Git_Selector(pn.viewable.Viewer):
+    lv2_model = param.ClassSelector(class_=Lvl2_Filter_Model)
+    
+    def __init__(self, **params):
+        super().__init__(**params)
+        self.git_selector = pn.widgets.MultiChoice(name="Sélectionnez les commits", options=[])
+        self.select_all_button = pn.widgets.Button(name="Tout sélectionner", button_type="success")
+        self.clear_button = pn.widgets.Button(name="Tout désélectionner", button_type="warning")
+        self.dialog = pn.pane.Alert(alert_type="danger", visible=False, sizing_mode="stretch_width")
+
+        self.select_all_button.on_click(self.select_all_sha1)
+        self.clear_button.on_click(self.clear_sha1)
+
+        self.git_selector.param.watch(self._check_selection_limit, 'value')
+
+        self._update_options()
+        
+    def __panel__(self):
+        return pn.Column(
+            self.select_all_button,
+            self.clear_button,
+            self.git_selector,
+            self.dialog
+        )
+
+    @param.depends('lv2_model.options', watch=True)
+    def _update_options(self, *events):
+        options = self.lv2_model.options["sha1"].unique().tolist()
+        self.git_selector.options = options
+        self.select_all_button.disabled = len(options) > MAX_SELECTION
+
+    def _check_selection_limit(self, event):
+        selected = event.new
+        if len(selected) > MAX_SELECTION:
+            self.git_selector.value = event.old
+            self.dialog.open(f"❌ Maximum {MAX_SELECTION} configurations.")
+        else:
+            self.lv2_model.value_sha1 = selected
+
+
+    def select_all_sha1(self, event=None):
+        if len(self.git_selector.options) > MAX_SELECTION:
+            self.dialog.open(f"⚠️ Plus de {MAX_SELECTION} configurations. Filtrez avant de tout sélectionner.")
+        else:
+            self.git_selector.value = self.git_selector.options
+
+    def clear_sha1(self, event=None):
+        self.git_selector.value = []
+        
+        
+        
 # affichage de la sélection     
 class TableConfig(pn.viewable.Viewer):
     lv2_filter = param.ClassSelector(class_=Lvl2_Filter_Model)
@@ -1002,7 +1086,7 @@ class TableConfig(pn.viewable.Viewer):
     def __init__(self, **params):
         super().__init__(**params)
         self.tab =  pn.pane.DataFrame(self._prepare(), name='table.selected_config', index=True)
-        self.lv2_filter.param.watch(self._update_table, 'value')
+        self.lv2_filter.param.watch(self._update_table, 'value_commands', 'value_sha1')
 
     def __panel__(self):
         return pn.Accordion( ("Configurations sélectionnées", self.tab))
@@ -1407,86 +1491,97 @@ class Tasks_Histogramme(pn.viewable.Viewer):
         )
         return pn.pane.Plotly(fig, sizing_mode="stretch_width")
 
-# Performance par niveau de bruit pour les configurations sélectionnées
-def plot_performance_metrics_plotly(configs, noiseScale):
-    # Si aucune configuration n'est sélectionnée
-    if not configs:
-        return pn.pane.Markdown("Veuillez sélectionner au moins une configuration pour afficher les performances.")
-    db = pn.state.cache['db']
-    filtered_df_runs = db['runs'][db['runs']["Command_id"].isin(configs)]
+# ------------------------------------------------------------------
+# Performance BER/FER par niveau de bruit (lvl2)
+# ------------------------------------------------------------------
+class PerformanceBERFERPlot(pn.viewable.Viewer):
     
+    lvl2_model = param.ClassSelector(class_=Lvl2_Filter_Model, doc="Modèle de filtrage de niveau 2")
+    noise_scale_param = param.ClassSelector(class_=NoiseScale, doc="Paramètre de niveau de bruit")
+    
+    def __init__(self, **params):
+        super().__init__(**params)
+        self._pane = pn.pane.Markdown("Chargement…")
+        self._update_fig()
+
+    def __panel__(self):
+        return self._pane
+
+    @param.depends('lvl2_model.value_commands', 'lvl2_model.value_sha1', 'noise_scale_param.value', watch=True)
+    def _update_fig(self, *events):
+        if self.lvl2_model.df.empty:
+            self._pane = pn.pane.Markdown("Veuillez sélectionner au moins une configuration.")
+            return
+        self._pane = self.plot_performance_metrics_plotly()
+
+    # Performance par niveau de bruit pour les configurations sélectionnées
+    def plot_performance_metrics_plotly(self):
+        # Si aucune configuration n'est sélectionnée
+        df_runs = self.lvl2_model.df_runs
         
-    filtered_df_runs = filtered_df_runs.merge(
-        db['command'][['sha1']],  # on ne garde que la colonne sha1
-        left_on='Command_id',
-        right_index=True,
-        how='left'
-    )
-    
-    if filtered_df_runs.empty:
-        return pn.pane.Markdown("Pas de données de performance disponibles pour les configurations sélectionnées.")
-    
-    filtered_df_runs = filtered_df_runs.sort_values(by=noiseScale, ascending=True)
-    
-    fig = go.Figure()
+        noiseScale = self.noise_scale_param.value
+            
+        df_runs = df_runs.sort_values(by=noiseScale, ascending=True)
+        
+        fig = go.Figure()
 
-    # Ajouter la colonne clé (couple Command_id + sha1)
-    filtered_df_runs['cmd_sha'] = (
-        filtered_df_runs['Command_id'].astype(str) + ' - ' +
-        filtered_df_runs['sha1'].str[:7]
-    )
+        # Ajouter la colonne clé (couple Command_id + sha1)
+        df_runs['cmd_sha'] = (
+            df_runs['Command_id'].astype(str) + ' - ' +
+            df_runs['sha1'].str[:7]
+        )
 
-    grouped = filtered_df_runs.groupby('cmd_sha')
-    colors = px.colors.qualitative.Plotly[:len(grouped)]
+        grouped = df_runs.groupby('cmd_sha')
+        colors = px.colors.qualitative.Plotly[:len(grouped)]
 
-    for (key, grp), color in zip(grouped, colors):
-        snr = grp[noiseScale]
-        ber = grp['Bit Error Rate (BER) and Frame Error Rate (FER).BER']
-        fer = grp['Bit Error Rate (BER) and Frame Error Rate (FER).FER']
+        for (key, grp), color in zip(grouped, colors):
+            snr = grp[noiseScale]
+            ber = grp['Bit Error Rate (BER) and Frame Error Rate (FER).BER']
+            fer = grp['Bit Error Rate (BER) and Frame Error Rate (FER).FER']
 
-        # Trace BER (ligne pleine avec marqueurs)
-        fig.add_trace(go.Scatter(
-            x=snr, y=ber,
-            mode='lines+markers',
-            name=f"BER - {key}",
-            line=dict(width=2, color=color),
-            marker=dict(symbol='circle', size=6)
-        ))
+            # Trace BER (ligne pleine avec marqueurs)
+            fig.add_trace(go.Scatter(
+                x=snr, y=ber,
+                mode='lines+markers',
+                name=f"BER - {key}",
+                line=dict(width=2, color=color),
+                marker=dict(symbol='circle', size=6)
+            ))
 
-        # Trace FER (ligne pointillée avec marqueurs)
-        fig.add_trace(go.Scatter(
-            x=snr, y=fer,
-            mode='lines+markers',
-            name=f"FER - {key}",
-            line=dict(width=2, dash='dash', color=color),
-            marker=dict(symbol='x', size=6)
-        ))
+            # Trace FER (ligne pointillée avec marqueurs)
+            fig.add_trace(go.Scatter(
+                x=snr, y=fer,
+                mode='lines+markers',
+                name=f"FER - {key}",
+                line=dict(width=2, dash='dash', color=color),
+                marker=dict(symbol='x', size=6)
+            ))
 
-    
-    # Configuration de la mise en page avec Range Slider et Range Selector
-    fig.update_layout(
-        title="BER et FER en fonction du SNR pour chaque couple (Command, Commit)",
-        xaxis=dict(
-            title=f"Niveau de Bruit (SNR) : {noiseScale}",
-            rangeslider=dict(visible=True),
-            rangeselector=dict(
-                buttons=list([
-                    dict(count=1, label="1dB", step="all", stepmode="backward"),
-                    dict(count=5, label="5dB", step="all", stepmode="backward"),
-                    dict(count=10, label="10dB", step="all", stepmode="backward"),
-                    dict(step="all")
-                ])
-            )
-        ),
-        yaxis=dict(title="Taux d'Erreur", type='log'),
-        legend_title="Command - Commit",
-        template="plotly_white",
-        height=600,
-        showlegend=True,
-        margin=dict(t=70, b=50, l=50, r=10)
-    )
-    
-    return pn.pane.Plotly(fig, sizing_mode="stretch_width")
+        
+        # Configuration de la mise en page avec Range Slider et Range Selector
+        fig.update_layout(
+            title="BER et FER en fonction du SNR pour chaque couple (Command, Commit)",
+            xaxis=dict(
+                title=f"Niveau de Bruit (SNR) : {noiseScale}",
+                rangeslider=dict(visible=True),
+                rangeselector=dict(
+                    buttons=list([
+                        dict(count=1, label="1dB", step="all", stepmode="backward"),
+                        dict(count=5, label="5dB", step="all", stepmode="backward"),
+                        dict(count=10, label="10dB", step="all", stepmode="backward"),
+                        dict(step="all")
+                    ])
+                )
+            ),
+            yaxis=dict(title="Taux d'Erreur", type='log'),
+            legend_title="Command - Commit",
+            template="plotly_white",
+            height=600,
+            showlegend=True,
+            margin=dict(t=70, b=50, l=50, r=10)
+        )
+        
+        return pn.pane.Plotly(fig, sizing_mode="stretch_width")
 
 # ------------------------------------------------------------------
 # Assemblage du panel git
