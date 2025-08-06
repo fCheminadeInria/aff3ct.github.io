@@ -78,7 +78,7 @@ def load_data_sync() -> None:
     tables = [
         'command',
         'parameters',
-        'exec'
+        'exec',
         'runs',
         'git',
     ]
@@ -92,6 +92,7 @@ def load_data_sync() -> None:
     db['command'].set_index('Command_id', inplace=True)
 
     db['parameters'].set_index('param_id', inplace=True)
+    
     db['runs'].set_index('RUN_id', inplace=True)
     db['git'].set_index('sha1', inplace=True)
 
@@ -119,17 +120,9 @@ def load_data_sync() -> None:
 def apply_typing_code():
     ''' Applique le typage des données  (copier coller du résultat de generate_typing_code) ''' 
     # Typage pour commands
-    commands = pn.state.cache['db']['command']
-    commands['Command'] = commands['Command'].astype(str)
-    commands['sha1'] = commands['sha1'].astype(str)
-    commands['Command_short'] = commands['Command_short'].astype(str)
-    commands['param_id'] = commands['param_id'].astype(str)
-    commands['Config_Alias'] = commands['Config_Alias'].astype(str)
-    pn.state.cache['db']['command'] = commands
-
-    exec = pn.state.cache['db']['exec']
-    exec['Date_Execution'] = pd.to_datetime(exec['Date_Execution'], errors='coerce')
-    pn.state.cache['db']['exec'] = exec
+    df_exec = pn.state.cache['db']['exec']
+    df_exec['Date_Execution'] = pd.to_datetime(df_exec['Date_Execution'], errors='coerce')
+    pn.state.cache['db']['exec'] = df_exec
 
     # Typage pour runs
     runs = pn.state.cache['db']['runs']
@@ -168,14 +161,7 @@ def init_dashboard():
 
     git_filter = GitFilterModel(df_git=db['git'])
 
-    merged_df = db['command'].merge(
-        db['parameters'][['Simulation.Code type (C)']],
-        left_on='param_id', right_index=True, how='left'
-    )
-    merged_df.rename(columns={'Simulation.Code type (C)': 'code'}, inplace=True)
-
-    command_filter = CommandFilterModel(df_commands=merged_df, git_filter=git_filter)
-
+    command_filter = CommandFilterModel(git_filter=git_filter)
     panelCommit = PanelCommit(command_filter=command_filter, git_filter=git_filter)
 
     lvl2_filter = Lvl2_Filter_Model(command_filter=command_filter)
@@ -299,73 +285,100 @@ class GitFilterModel(param.Parameterized):
     """Modèle pour filtrer les données Git par plage de dates."""
     df_git = param.DataFrame()
     date_range = param.Tuple(default=(None, None), length=2, doc="Plage de dates pour filtrer")
-    filtered = param.Parameter()
-
-    @param.depends('date_range', watch=True)
-    def _trigger(self):
-        self.param.trigger('filtered')
 
     def __init__(self, **params):
         super().__init__(**params)
         # Si date_range n'est pas fourni, on initialise avec la plage complète des dates
+        db = pn.state.cache['db']
+        
         if self.date_range == (None, None):
-            min_date = self.df_git['date'].min()
-            max_date = self.df_git['date'].max()
+            min_date = db ['git']['date'].min()
+            max_date = db ['git']['date'].max()
             self.date_range = (min_date, max_date)
 
-    def get_filtered_df(self):
-        df = self.df_git.copy()
+    @param.depends('date_range', watch=True)
+    def set_filtered_df(self):
+        db = pn.state.cache['db']
+        df = db ['git'].copy()
         start, end = self.date_range
         if start and end:
             start = pd.to_datetime(start).floor('s')
             end   = pd.to_datetime(end).ceil('s')
             df = df[(df['date'] >= start) & (df['date'] <= end)]
-        return df
+        self.df_git = df
     
     def get_sha1_valids(self):
-        return self.get_filtered_df().index.unique()
+        return self.df_git.index.unique()
 
 class CommandFilterModel(param.Parameterized):
     """Modèle pour filtrer les commandes sur la base du filtrage de Git et par commandes."""
-    df_commands = param.DataFrame()
     git_filter = param.ClassSelector(class_=GitFilterModel) 
     code = param.ListSelector(default=[], objects=[])
-    filtered = param.Parameter() # variable pour déclencher le filtrage
+    df_exec = param.DataFrame(default=pd.DataFrame(), doc="DataFrame des exécutions filtrées")
+
 
     def __init__(self, **params):
         super().__init__(**params)
+        
+        db = pn.state.cache['db']
+        
         # Initialisation de 'code' avec toutes les valeurs possibles dans df_commands['code']
-        all_codes = sorted(self.df_commands['code'].dropna().unique().tolist())
+        all_codes = sorted(db['command']['code'].dropna().unique().tolist())
         self.param['code'].objects = all_codes
         self.param['code'].default = all_codes 
         self.code = all_codes
-        self.__df_filtered()
-
-    @param.depends('git_filter.filtered', 'code', watch=True)
-    def _trigger(self):
-        self.__df_filtered()
-        self.param.trigger('filtered')
-
-    def __df_filtered(self):
-        sha1_valids = self.git_filter.get_sha1_valids()
-        df_filtered = self.df_commands[self.df_commands['sha1'].isin(sha1_valids)]
-        # filtre par code
-        if 'All' not in self.code:
-            df_filtered = df_filtered[df_filtered['code'].isin(self.code)]
-        self.df_filtered = df_filtered 
-
-    def get_filtered_df(self):
-        return self.df_filtered
+        self._df_exec()
+    
+    @param.depends('git_filter.df_git', 'code', watch=True)
+    def _df_exec(self):
+        """
+        Filtre les executions selon le modèle (code et sha1).
+        
+        returns:   
+            DataFrame filtrée des exécutions avec les commandes correspondantes. (avec le code issue de db['command'])
+        """
+        db = pn.state.cache['db'] 
+        
+        # filtre les exécutions par les sha1 valides du git_filter
+        df_exec = db['exec'][db['exec']['sha1'].isin(self.sha1)]     
+        
+        # filtre les commandes par les codes sélectionnés
+        commands = self.df_commands
+        
+        self.param.code.objects  = sorted(commands['code'].dropna().unique().tolist())
+        
+        # ajoute les command_id à exec élimine les lignes sans correspondance de command_id
+        df_exec = df_exec.merge(
+            commands[['code']],
+            left_on='Command_id',
+            right_index=True,
+            how='inner'
+        )
+        self.df_exec =  df_exec
+        self.param.trigger('df_exec')
+        
+    @property
+    def df_commands(self):
+        db = pn.state.cache['db'] 
+        return db['command'][db['command']['code'].isin(self.code)]
     
     @property
-    def df_exec(self):
-        """Renvoie les executions filtrées par le modèle."""
-        db = pn.state.cache['db']
-        df = self.df_filtered        
-        exec = db['exec'][db['exec']['Command_id'].isin(df.index)]
-        exec = db['exec'][db['exec']['sha1'].isin(df['sha1'].values)]
-        return exec
+    def sha1(self):
+        """
+        Renvoie les sha1 sélectionnés.
+        """
+        return self.git_filter.get_sha1_valids()
+    
+    @property
+    def commands(self):
+        """Renvoie les commandes filtrées par le modèle.
 
+        Returns:
+            list: identifiants des commandes filtrées.
+        """
+        return self.df_commands().index.tolist()
+    
+    
 ################################################
 ## Gestion des données niveau 2 avec filtrage ##
 ################################################
@@ -383,50 +396,60 @@ class Lvl2_Filter_Model(param.Parameterized):
         self.value_sha1 = []
         self._update_from_lvl1()
 
-    @param.depends('command_filter.filtered', watch=True)
+    @param.depends('command_filter.df_exec', watch=True)
     def _update_from_lvl1(self, *events):
         """Met à jour les options et la sélection en fonction du filtrage du niveau 1."""
-        self.options = self.command_filter.get_filtered_df().copy()
+        self.options = self.command_filter.df_exec.copy().merge(
+            self.command_filter.df_commands[['Config_Alias']],
+            left_on='Command_id',
+            right_index=True,
+            how='inner'
+        )
 
         # Nettoie la sélection courante
         self.value_commands = list(dict.fromkeys(
-            v for v in self.value_commands if v in self.options.index
+            v for v in self.value_commands if v in self.command_filter.commands
         ))
+        
         self.value_sha1 = list(dict.fromkeys(
-            v for v in self.value_sha1 if v in self.options['sha1'].values
+            v for v in self.value_sha1 if v in self.command_filter.sha1
         ))
 
     @property
-    def df(self):
+    def df_commands(self):
         """DataFrame filtré par le niveau 2 : index = command_id, colonnes = ['sha1', 'Config_Alias', ...]"""
-        if self.options.empty:
-            return pd.DataFrame()
-        
-        # Intersection entre command_id sélectionnés et sha1 sélectionnés
-        selection = self.options.loc[self.value_commands]
-        selection = selection[selection['sha1'].isin(self.value_sha1)]
-        
-        return selection
+        db = pn.state.cache['db']
+        return db['command'][db['command'].index.isin(self.cross_commands)].copy()
+
+    @property
+    def cross_commands(self):
+        """Renvoie les commandes sélectionnées."""
+        return self.df_exec['Command_id'].unique().tolist()
+
+    @property
+    def cross_sha1(self):
+        """Renvoie les sha1 sélectionnés."""
+        return self.df_exec['sha1'].unique().tolist()
 
     @property
     def df_exec(self):
         """DataFrame des exécutions (runs) filtrées par le niveau 2."""
-        exec = self.df_exec
-        exec = exec[exec['Command_id'].isin(self.value_commands)]
-        exec = exec[exec['sha1'].isin(self.value_sha1)]
-        return exec
+        exec_df = self.command_filter.df_exec
+        exec_df = exec_df[exec_df['Command_id'].isin(self.value_commands)]
+        exec_df = exec_df[exec_df['sha1'].isin(self.value_sha1)]
+        return exec_df
 
     @property
     def df_runs(self):
         runs = pn.state.cache['db']['runs']  
         
-        sel = runs[runs["Command_id"].isin(self.df.index)]
+        sel = runs[runs["log_hash"].isin(self.df_exec.index)]
         # ajoute la colonne sha1 issue du DataFrame self.df
         sel = sel.merge(
-            self.df[['sha1']],
-            left_on='Command_id',
+            self.df_exec[['sha1']],
+            left_on='log_hash',
             right_index=True,
-            how='left'
+            how='inner'
         )
         return sel
 
@@ -444,15 +467,10 @@ class ConfigUniqueModel(param.Parameterized):
     options = param.Selector(default=None, objects=[])
 
     @property
-    def _df_configs_from_lvl2(self):
-        """Accès sécurisé au DataFrame."""
-        return self.lv2_model.df if self.lv2_model is not None else pd.DataFrame()
-
-    @property
     def df(self):
         if self.config is None:
-            return self._df_configs_from_lvl2.iloc[0:0]  # DataFrame vide
-        return self._df_configs_from_lvl2.loc[self.config]
+            return self.lv2_model.df_exec.iloc[0:0]  # DataFrame vide
+        return self.lv2_model.df_exec.loc[self.config]
 
     @property
     def df_runs(self):
@@ -463,23 +481,24 @@ class ConfigUniqueModel(param.Parameterized):
  
     @property
     def options_alias(self):
-        return self._df_configs_from_lvl2['Config_Alias'].unique().tolist()
+        return self.lv2_model.df_commands['Config_Alias'].unique().tolist()
 
+    
     def _find_id_by_alias(self, alias):
-        df = self._df_configs_from_lvl2
-        if df.empty or 'Config_Alias' not in df.columns:
+        df_commands = self.lv2_model.df_commands
+        if df_commands.empty or 'Config_Alias' not in df_commands.columns:
             return None
-        matched = df.index[df['Config_Alias'] == alias]
+        matched = df_commands.index[df_commands['Config_Alias'] == alias]
         return matched[0] if len(matched) > 0 else None
 
     def alias(self):
         if (
             self.config is None or
-            self.config not in self._df_configs_from_lvl2.index
+            self.config not in self.lv2_model.df_exec.index
         ):
             return '-'
         
-        aliases = self._df_configs_from_lvl2.loc[self.config, 'Config_Alias']
+        aliases = self.lv2_model.df_exec.loc[self.config, 'Config_Alias']
         
         if isinstance(aliases, pd.Series):
             return aliases.iloc[0]  # ou `return list(aliases)` si tu veux tout renvoyer
@@ -497,7 +516,7 @@ class ConfigUniqueModel(param.Parameterized):
 
     @param.depends('lv2_model.value_commands', 'lv2_model.value_sha1', watch=True)
     def _on_lvl2_df_change(self):
-        opts = self._df_configs_from_lvl2.index.tolist()
+        opts = self.lv2_model.df_exec.index.tolist()
         # Initialise la valeur avec le command_id correspondant au premier alias
         if self.config not in opts :
             self.config = opts[0] if opts else None
@@ -663,29 +682,14 @@ class DateRangeFilter(pn.viewable.Viewer):
         return self.slider
 
 class PerformanceByCommit(pn.viewable.Viewer):
-    git_filter = param.ClassSelector(class_=GitFilterModel)
     command_filter = param.ClassSelector(class_=CommandFilterModel)
     
     def __init__(self, **params):
         super().__init__(**params)
 
-        self.git_filter.param.watch(self._update_all, 'filtered')
-        self.command_filter.param.watch(self._update_all, 'filtered')
-        
         self.plot_throughput_pane = pn.pane.Plotly(sizing_mode='stretch_width')
         self.plot_latency_pane = pn.pane.Plotly(sizing_mode='stretch_width')
-                
-        db = pn.state.cache['db']
-        
-        # filtrage sur les commandes restantes et ajouts des colonnes de date
-        df = db['runs'][db['runs']['Command_id'].isin(self.command_filter.df_commands.index)].merge(
-           self.command_filter.df_commands[['sha1', 'code']], left_on='Command_id', right_index=True
-        ).merge(
-            db['git'][['date']], left_on='sha1', right_index=True
-        ).reset_index(drop=True)
-        
-        self.df = df.sort_values(by=['date'])
-        
+             
         self._update_all()
         
         self.tabs = pn.Tabs(
@@ -693,6 +697,7 @@ class PerformanceByCommit(pn.viewable.Viewer):
             ('⏱️ Débit', self.plot_throughput_pane),
         )
         
+    @param.depends('command_filter.df_exec', watch=True)
     def _update_all(self, *events):
         self._update_data()
         self._create_plots()
@@ -700,15 +705,19 @@ class PerformanceByCommit(pn.viewable.Viewer):
         self.plot_latency_pane.object = self.fig_latency
 
     def _update_data(self):
-
-        df = self.df[
-            (self.df['sha1'].isin(self.git_filter.get_filtered_df().index)) &
-            (self.df['Command_id'].isin(self.command_filter.get_filtered_df().index))
-        ]
-        
         # Aggrégation des données par commit et par type de code
         throughput_col = 'Global throughputand elapsed time.SIM_THR(Mb/s)'
         latency_col = 'Global throughputand elapsed time.elapse_time(ns)'
+        
+        db = pn.state.cache['db']
+        df_exec = self.command_filter.df_exec
+
+        df_exec = df_exec.merge(
+            db['git'][['date']], left_on='sha1', right_index=True, how='inner'
+        )
+        df = db['runs'].merge(df_exec[['Command_id', 'sha1', 'date', 'code']], on='log_hash', how='left')
+
+        df = df.sort_values(by=['date'])
         
         self.df_grouped = df.groupby(['sha1', 'code']).agg({
             throughput_col: 'mean',
@@ -763,8 +772,7 @@ class CodeSelector(pn.viewable.Viewer):
         self.widget = pn.widgets.CheckBoxGroup(name='Codes à afficher', inline=True)
         
         db = pn.state.cache['db']
-        self.widget.options = sorted(db['parameters']['Simulation.Code type (C)'].fillna('Non défini').unique().tolist())
-        self.cmd_filter_model.param['code'].objects = self.widget.options   
+        self.widget.options = self.cmd_filter_model.param.code.objects
         self.widget.value = self.cmd_filter_model.param['code'].default  # Affecte la valeur par défaut des codes     
         # self.widget.param.watch(self._update_filter, 'value')
         
@@ -817,10 +825,10 @@ class FilteredTable(pn.viewable.Viewer):
         super().__init__(**params)
         self.table = pn.widgets.DataFrame(height=300, text_align='center', sizing_mode="stretch_width")
         self._update()
-        self.filter_model.param.watch(self._update, ['filtered'])
 
+    @param.depends('filter_model.df_git', watch=True)
     def _update(self, *events):
-        self.table.value = self.filter_model.get_filtered_df()
+        self.table.value = self.filter_model.df_git
 
     def __panel__(self):
         return self.table
@@ -840,18 +848,16 @@ class GitIndicators(pn.viewable.Viewer):
         self.last_commit_text = pn.widgets.StaticText(name="Date du dernier commit")
 
         # Écoute uniquement les changements de filtre Git
-        self.filter_model.param.watch(self._update, 'filtered')
         self._update()
 
+    @param.depends('filter_model.df_git', watch=True)
     def _update(self, *events):
-        df_filtered = self.filter_model.get_filtered_df()
+        df_filtered = self.filter_model.df_git
         self.commit_count.value = len(df_filtered)
         df_commands = pn.state.cache['db']['command']
+        df_exec = pn.state.cache['db']['exec']
         if not df_filtered.empty:
-            valid_sha1 = df_filtered.index
-            
-            count_valid_sha1 = df_commands[df_commands['sha1'].isin(valid_sha1)]['sha1'].nunique()
-            self.git_version_count.value = count_valid_sha1
+            self.git_version_count.value = df_exec[df_exec['sha1'].isin(self.filter_model.get_sha1_valids())]['sha1'].nunique()
 
             latest_date = df_filtered['date'].max()
             self.last_commit_text.value = latest_date.strftime('%Y-%m-%d %H:%M:%S')
@@ -903,6 +909,9 @@ class Lvl2_ConfigPanel(pn.viewable.Viewer):
 
     def _check_selection_limit(self, event):
         selected = event.new
+        if not isinstance(selected, list):
+            print(f"⚠️ WARN: expected list, got {type(selected)}")
+            return
         if len(selected) > MAX_SELECTION:
             self.config_selector.value = event.old
             self.dialog.open(f"❌ Maximum {MAX_SELECTION} configurations.")
@@ -988,165 +997,12 @@ class TableConfig(pn.viewable.Viewer):
 
     def _prepare(self):
         db = pn.state.cache['db']
-        if self.meta :
-            df_filtered = self.lv2_filter.df[['meta_id']] .merge(db['meta'] , left_on='meta_id',  right_index=True).drop(columns=['meta_id'])
-        else :
-            df_filtered = self.lv2_filter.df[['param_id']].merge(db['parameters'], left_on='param_id', right_index=True).drop(columns=['param_id'])
+        df_filtered = self.lv2_filter.df_commands[['param_id']].merge(
+            db['parameters'], 
+            left_on='param_id', 
+            right_index=True
+        ).drop(columns=['param_id'])
         return df_filtered
-
-class Panel_graph_envelope(pn.viewable.Viewer):
-    # Paramètres configurables
-    df = param.DataFrame(doc="Le dataframe contenant les données")
-    lab = param.String(default="y", doc="Nom de la colonne pour l'axe Y")
-    lab_group = param.String(default=None, doc="Nom de la colonne pour regrouper les données")
-    labmin = param.String(default=None, doc="Nom de la colonne pour la valeur minimale")
-    labmax = param.String(default=None, doc="Nom de la colonne pour la valeur maximale")
-    Ytitle = param.String(default="Valeur", doc="Titre de l'axe Y")
-    noiseScale = param.ClassSelector(default=None, class_=pn.viewable.Viewer,doc="Choix de l'échelle de bruit par passage du label de la colonne")
-    lv2_model = param.ClassSelector(default=None, class_=Lvl2_Filter_Model, doc="Modèle de filtrage de niveau 2")
-
-    def __init__(self, **params):
-        super().__init__(**params)
-        
-        self.button_env = pn.widgets.Toggle(name='〽️', value=True)
-        
-        if (self.labmin == None or self.labmax == None):
-            self.button_env.value=False
-            self.button_env.disabled=True
-        
-        self.ListBouton = pn.Column(
-            pn.widgets.TooltipIcon(value="Activer/Désactiver Enveloppe"), 
-            self.button_env,
-            width=50)
-        self.graphPanel = pn.bind(self._plot_enveloppe_incertitude,self.button_env, self.noiseScale.param.value)
-        
-
-    def __panel__(self):
-        return pn.Row(self.ListBouton, self.graphPanel)
-        
-    def _plot_enveloppe_incertitude(self, show_envelope, noiseKey):    
-        
-        index = self.lv2_model.value
-        
-        if index is None :
-            df_filtred = self.df
-        else :
-            df_filtred = self.df[self.df["Command_id"].isin(index)] 
-        
-        # Si pas de données de tâches pour les configurations sélectionnées
-        if df_filtred.empty:
-            self.button_env.disabled=True
-            if self.lab_group :
-                return pn.pane.Markdown(f"Graphes de {self.Ytitle} : Pas de données de {self.lab_group} disponibles pour les configurations sélectionnées.")
-            else :
-                return pn.pane.Markdown(f"Graphes de {self.Ytitle} : Pas de données disponibles pour les configurations sélectionnées.")
-        else :
-            self.button_env.disabled=False
-            
-        if (self.labmin == None or self.labmax == None):
-            show_envelope = False
-        
-        color_cycle = itertools.cycle(px.colors.qualitative.Plotly)
-        fig = go.Figure()
-
-        # Ajouter une trace pour chaque configuration et tâche
-        for i, config in enumerate(index):
-            # Filtrer les données pour chaque configuration
-            config_data = df_filtred[df_filtred['Command_id'] == config]
-            
-            db = pn.state.cache['db']
-            alias = db['command'].loc[config, 'Config_Alias'] #variable global pas propre mais commode
-            if self.lab_group :
-                for j, t in enumerate(config_data[self.lab_group].unique()):  
-                    task_data = config_data[config_data[self.lab_group] == t]
-                    snr = task_data[noiseKey]
-                    y_values = task_data[self.lab]         
-                    color = next(color_cycle)
-
-                    if show_envelope :
-                        y_values_min = task_data[self.labmin]  
-                        y_values_max = task_data[self.labmax]   
-                        
-                        # Courbe pour la latence avec enveloppe
-                        fig.add_trace(go.Scatter(
-                            x=snr, y=y_values_max,
-                            fill=None, mode='lines+markers',
-                            line=dict(width=2, dash='dash', color=color),
-                            marker=dict(symbol='x', size=6),
-                            showlegend=False
-                        ))
-                        fig.add_trace(go.Scatter(
-                            x=snr, y=y_values_min,
-                            fill='tonexty', mode='lines+markers',
-                            line=dict(width=2, dash='dash', color=color),
-                            marker=dict(symbol='x', size=6),
-                            name=f"min/max - {alias} - {t}"  
-                        ))
-   
-                    fig.add_trace(go.Scatter(
-                        x=snr, y=y_values,
-                        mode='lines+markers',
-                        line=dict(width=2, color=color),
-                        name=f"{self.lab} - {alias} - {t}"  
-                    ))
-            else :
-                color = next(color_cycle)
-                snr = config_data[noiseKey]
-                y_values = config_data[self.lab]         
-                
-                if show_envelope :
-                    y_values_min = config_data[self.labmin]  
-                    y_values_max = config_data[self.labmax]   
-                    
-                    # Courbe pour la latence avec enveloppe
-                    fig.add_trace(go.Scatter(
-                        x=snr, y=y_values_max,
-                        fill=None, mode='lines+markers',
-                        line=dict(width=2, dash='dash', color=color),
-                        marker=dict(symbol='x', size=6),
-                        showlegend=False
-                    ))
-                    fig.add_trace(go.Scatter(
-                        x=snr, y=y_values_min,
-                        fill='tonexty', mode='lines+markers',
-                        line=dict(width=2, dash='dash', color=color),
-                        marker=dict(symbol='x', size=6),
-                        name=f"min/max - {config}"  
-                    ))
-                
-                fig.add_trace(go.Scatter(
-                    x=snr, y=y_values,
-                    mode='lines+markers',
-                    line=dict(width=2, color=color),
-                    name=f"{self.lab} - {config}"  
-                ))
-        
-        # Configuration de la mise en page avec Range Slider et Range Selector
-        fig.update_layout(
-            title="Latence en fonction du SNR pour chaque configuration",
-            xaxis=dict(
-                title=f"Niveau de Bruit (SNR) : {noiseKey}",
-                rangeslider=dict(visible=True),
-                rangeselector=dict(
-                    buttons=list([
-                        dict(count=1, label="1dB", step="all", stepmode="backward"),
-                        dict(count=5, label="5dB", step="all", stepmode="backward"),
-                        dict(count=10, label="10dB", step="all", stepmode="backward"),
-                        dict(step="all")
-                    ])
-                )
-            ),
-            yaxis=dict(
-                title=self.Ytitle,
-            ),
-            legend_title="Configurations",
-            template="plotly_white",
-            height=600,
-            showlegend=True,
-            margin=dict(t=70, b=50, l=50, r=10)
-        )
-        
-        return  pn.pane.Plotly(fig, sizing_mode="stretch_width")
 
 ##################################### Niveau 3 : Commande ####################################
 
@@ -1401,8 +1257,8 @@ class PerformanceBERFERPlot(pn.viewable.Viewer):
 
     @param.depends('lvl2_model.value_commands', 'lvl2_model.value_sha1', 'noise_scale_param.value', watch=True)
     def _update_fig(self, *events):
-        if self.lvl2_model.df.empty:
-            self._pane = pn.pane.Markdown("Veuillez sélectionner au moins une configuration.")
+        if self.lvl2_model.df_exec.empty:
+            self._pane = pn.pane.Markdown("Veuillez sélectionner au moins une execution.")
             return
         self._pane = self.plot_performance_metrics_plotly()
 
@@ -1492,7 +1348,7 @@ class PanelCommit(pn.viewable.Viewer):
         self.table = FilteredTable(filter_model=self.git_filter)
         db = pn.state.cache['db']
         self.indicators = GitIndicators(filter_model=self.git_filter)
-        self.perfgraph = PerformanceByCommit(git_filter=self.git_filter, command_filter=self.command_filter)
+        self.perfgraph = PerformanceByCommit(command_filter=self.command_filter)
 
     def __panel__(self):
         return pn.Column(
@@ -1505,7 +1361,7 @@ class PanelCommit(pn.viewable.Viewer):
         )
 
     def update_command_table(self, event=None):
-        self.command_table.value = self.command_filter.get_filtered_df()
+        self.command_table.value = self.command_filter.df_git
 
 # ------------------------------------------------------------------
 # Paramêtre du site
