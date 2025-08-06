@@ -170,7 +170,7 @@ def init_dashboard():
     panelConfig = pn.Row(
         pn.Column(
             config_panel,
-            TableConfig(lv2_filter=lvl2_filter, meta=False),
+            TableConfig(lv2_filter=lvl2_filter),
             Lvl2_Git_Selector(lv2_model=lvl2_filter),
             pn.Tabs(
                 ('BER/FER', PerformanceBERFERPlot(lvl2_model = lvl2_filter, noise_scale_param=noiseScale))),
@@ -179,7 +179,6 @@ def init_dashboard():
     )
 
     unique_model = ConfigUniqueModel(lv2_model=lvl2_filter)
-
 
     panel_par_config = pn.Column(
         ConfigUniqueSelector(name="One Configuration Selection", model= unique_model),
@@ -191,12 +190,20 @@ def init_dashboard():
         sizing_mode="stretch_width"
     )
 
-    config_count = pn.indicators.Number(
-        name="Configurations en base",
+    panelData = pn.Column(
+        pn.indicators.Number(
+        name="Commands en base",
         value=db['command'].shape[0] if not db['command'].empty else 0
-    )
-
-    panelData = pn.Column(config_count, sizing_mode="stretch_width")
+        ), 
+        pn.indicators.Number(
+            name="Executions en base",
+            value=db['exec'].shape[0] if not db['exec'].empty else 0
+        ),
+        pn.indicators.Number(
+            name="Executions par pas de SNR en base",
+            value=db['runs'].shape[0] if not db['runs'].empty else 0
+        ), 
+        sizing_mode="stretch_width")
 
     dashboard = pn.Column(
         pn.pane.HTML("<h2>✏️ Niveau 1 : Evolution par commit</h2>"),
@@ -464,7 +471,6 @@ class Lvl2_Filter_Model(param.Parameterized):
 class ConfigUniqueModel(param.Parameterized):
     lv2_model = param.ClassSelector(default=None, class_=Lvl2_Filter_Model)
     config = param.Selector(default=None, objects=[])
-    options = param.Selector(default=None, objects=[])
 
     @property
     def df(self):
@@ -481,7 +487,7 @@ class ConfigUniqueModel(param.Parameterized):
  
     @property
     def options_alias(self):
-        return self.lv2_model.df_commands['Config_Alias'].unique().tolist()
+        return self.lv2_model.df_commands['Config_Alias'].tolist()
 
 
     def alias(self):
@@ -505,11 +511,13 @@ class ConfigUniqueModel(param.Parameterized):
 
     @param.depends('lv2_model.value_commands', 'lv2_model.value_sha1', watch=True)
     def _on_lvl2_df_change(self):
-        opts = self.lv2_model.df_exec.index.tolist()
+        opts = self.lv2_model.df_commands.index.tolist()
         # Initialise la valeur avec le command_id correspondant au premier alias
         if self.config not in opts :
             self.config = opts[0] if opts else None
-        self.options = opts
+        self.param['config'].objects = opts
+
+
 
     @property
     def df_exec(self):
@@ -532,31 +540,17 @@ class ExecUniqueModel(param.Parameterized):
     @param.depends('unique_conf_model.config', watch=True)
     def _update_exec(self):
         """Construit la liste des exécutions disponibles et met à jour le sélecteur."""
+        df_exec = self.unique_conf_model.df_exec
         
-        if self.unique_conf_model.df_runs.empty:
+        if df_exec.empty:
             self.param['log_hash'].objects = {None: None}
             self.log_hash = None
             return
-
-        # DataFrame temporaire avec les infos nécessaires
-        opts = (self.unique_conf_model.df_runs[['log_hash', 'Date_Execution']]
-                .drop_duplicates()
-                .sort_values('Date_Execution')
-                .reset_index(drop=True))
-        opts['Date_Execution'] = pd.to_datetime(opts['Date_Execution'], errors='coerce')
-
-        # Construction du dictionnaire {label: valeur}
-        label_map = {
-            f"EXEC{i+1} - {ts.isoformat(' ', 'seconds')}": log_hash
-            for i, (log_hash, ts) in enumerate(zip(opts['log_hash'], opts['Date_Execution']))
-        }
-
-        # Mise à jour du sélecteur
-        self.param['log_hash'].objects = label_map
-
+        #mise à jour des options
+        self.param['log_hash'].objects = df_exec.index.to_list()
         # Sélectionner la première exécution par défaut
-        self.log_hash = next(iter(label_map.values()), None)      
-
+        self.log_hash = self.param['log_hash'].objects[0]
+            
     @property
     def df_runs(self):
         """Renvoie le sous-ensemble des runs (SNR différents) pour la config sélectionnée."""
@@ -593,13 +587,37 @@ class ExecUniqueModel(param.Parameterized):
 
     @property
     def options(self):
-        """Liste des dates d'exécution disponibles pour le run_id sélectionné."""
-        return self.param['log_hash'].objects.values
+        """Liste des labels d'exécution disponibles pour la sélection."""
+        df_exec = self.unique_conf_model.df_exec
+        
+        if df_exec.empty:
+            self.param['log_hash'].objects = {None: None}
+            self.log_hash = None
+            return
+
+        opts = (df_exec.reset_index()[['log_hash', 'Date_Execution', 'sha1']]
+                .drop_duplicates()
+                .sort_values('Date_Execution')
+                .reset_index(drop=True))
+        opts['label'] = opts['sha1'] + "_" + opts['Date_Execution'].dt.strftime('%Y-%m-%d %H:%M:%S') 
+        
+        
+        return opts['label'].to_list()
 
     @property
     def label_map(self):
-        return self.param['log_hash'].objects
+        df_exec = self.unique_conf_model.df_exec
+        if df_exec.empty:
+            self.param['log_hash'].objects = {None: None}
+            self.log_hash = None
+            return
 
+        opts = (df_exec.reset_index()[['log_hash', 'Date_Execution', 'sha1']]
+                .drop_duplicates()
+                .sort_values('Date_Execution')
+                .reset_index(drop=True))
+        opts['label'] = opts['sha1'] + "_" + opts['Date_Execution'].dt.strftime('%Y-%m-%d %H:%M:%S') 
+        return opts['label'].to_dict()
 
     @property
     def log(self):
@@ -975,16 +993,15 @@ class Lvl2_Git_Selector(pn.viewable.Viewer):
 # affichage de la sélection     
 class TableConfig(pn.viewable.Viewer):
     lv2_filter = param.ClassSelector(class_=Lvl2_Filter_Model)
-    meta = param.Boolean(doc="affiche les Meta-données si Vrai, les paramètres de simmulation si faux")
     
     def __init__(self, **params):
         super().__init__(**params)
         self.tab =  pn.pane.DataFrame(self._prepare(), name='table.selected_config', index=True)
-        self.lv2_filter.param.watch(self._update_table, 'value_commands', 'value_sha1')
 
     def __panel__(self):
         return pn.Accordion( ("Configurations sélectionnées", self.tab))
     
+    @param.depends('lv2_filter.value_commands', 'lv2_filter.value_sha1', watch=True)
     def _update_table(self, event=None):
         self.tab.object = self._prepare()
 
@@ -1027,7 +1044,7 @@ class ConfigUniqueSelector(pn.viewable.Viewer):
         else:
             self.model.value = None
 
-    @param.depends('model.options', watch=True)
+    @param.depends('model.config', watch=True)
     def _sync_selector_from_model(self, event=None):
         alias = self.model.alias()
         opts = self.model.options_alias
@@ -1242,18 +1259,16 @@ class PerformanceBERFERPlot(pn.viewable.Viewer):
     
     def __init__(self, **params):
         super().__init__(**params)
-        self._pane = pn.pane.Markdown("Chargement…")
         self._update_fig()
 
     def __panel__(self):
-        return self._pane
+        return self._update_fig
 
-    @param.depends('lvl2_model.value_commands', 'lvl2_model.value_sha1', 'noise_scale_param.value', watch=True)
-    def _update_fig(self, *events):
+    @pn.depends('lvl2_model.value_commands', 'lvl2_model.value_sha1', 'noise_scale_param.value', watch=True)
+    def _update_fig(self):
         if self.lvl2_model.df_exec.empty:
-            self._pane = pn.pane.Markdown("Veuillez sélectionner au moins une execution.")
-            return
-        self._pane = self.plot_performance_metrics_plotly()
+            return pn.pane.Markdown("Veuillez sélectionner au moins une execution.")
+        return self.plot_performance_metrics_plotly()
 
     # Performance par niveau de bruit pour les configurations sélectionnées
     def plot_performance_metrics_plotly(self):
