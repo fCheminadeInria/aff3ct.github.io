@@ -446,7 +446,7 @@ class Lvl2_Filter_Model(param.Parameterized):
         sel = runs[runs["log_hash"].isin(self.df_exec.index)]
         # ajoute la colonne sha1 issue du DataFrame self.df
         sel = sel.merge(
-            self.df_exec[['sha1']],
+            self.df_exec[['sha1', 'Command_id']],
             left_on='log_hash',
             right_index=True,
             how='inner'
@@ -475,21 +475,14 @@ class ConfigUniqueModel(param.Parameterized):
     @property
     def df_runs(self):
         db = pn.state.cache.get('db', {})
-        if 'runs' not in db or self.config is None:
+        if self.config is None:
             return pd.DataFrame()
-        return  db['runs'][db['runs']['Command_id']== self.config]        
+        return  db['runs'][db['runs']['log_hash'].isin(self.df_exec.index)]        
  
     @property
     def options_alias(self):
         return self.lv2_model.df_commands['Config_Alias'].unique().tolist()
 
-    
-    def _find_id_by_alias(self, alias):
-        df_commands = self.lv2_model.df_commands
-        if df_commands.empty or 'Config_Alias' not in df_commands.columns:
-            return None
-        matched = df_commands.index[df_commands['Config_Alias'] == alias]
-        return matched[0] if len(matched) > 0 else None
 
     def alias(self):
         if (
@@ -498,21 +491,17 @@ class ConfigUniqueModel(param.Parameterized):
         ):
             return '-'
         
-        aliases = self.lv2_model.df_exec.loc[self.config, 'Config_Alias']
-        
-        if isinstance(aliases, pd.Series):
-            return aliases.iloc[0]  # ou `return list(aliases)` si tu veux tout renvoyer
-        return aliases
-
-    def value_by_alias(self, alias):
-        id = self._find_id_by_alias(alias)
-        if id is not None:
-            self.value = id
+        db = pn.state.cache.get('db', {})
+        return db['command'].loc[self.config, 'Config_Alias']
 
     def config_by_alias(self, alias):
-        id = self._find_id_by_alias(alias)
-        if id is not None:
-            self.config = id
+        db = pn.state.cache.get('db', {})
+        df = db.get('command', pd.DataFrame())
+        match = df[df['Config_Alias'] == alias]
+        if not match.empty:
+            return match.index[0]  # Renvoie le Command_id
+        else:
+            return None
 
     @param.depends('lv2_model.value_commands', 'lv2_model.value_sha1', watch=True)
     def _on_lvl2_df_change(self):
@@ -521,6 +510,12 @@ class ConfigUniqueModel(param.Parameterized):
         if self.config not in opts :
             self.config = opts[0] if opts else None
         self.options = opts
+
+    @property
+    def df_exec(self):
+        """Renvoie le DataFrame des exécutions filtrées par la configuration unique."""
+        df_exec = self.lv2_model.df_exec
+        return df_exec[df_exec['Command_id'] == self.config].copy()
 
 
 class ExecUniqueModel(param.Parameterized):
@@ -909,15 +904,13 @@ class Lvl2_ConfigPanel(pn.viewable.Viewer):
 
     def _check_selection_limit(self, event):
         selected = event.new
-        if not isinstance(selected, list):
-            print(f"⚠️ WARN: expected list, got {type(selected)}")
-            return
         if len(selected) > MAX_SELECTION:
             self.config_selector.value = event.old
             self.dialog.open(f"❌ Maximum {MAX_SELECTION} configurations.")
         else:
             # Met à jour la liste des commandes sélectionnées dans le modèle en recupérant l'index pour l'alias
-            self.lv2_model.value_commands = self.lv2_model.options[self.lv2_model.options["Config_Alias"].isin(selected)].index.tolist()
+            df = pn.state.cache['db']['command']
+            self.lv2_model.value_commands = df[df["Config_Alias"].isin(selected)].index.tolist()
 
     def select_all_configs(self, event=None):
         if len(self.config_selector.options) > MAX_SELECTION:
