@@ -316,11 +316,10 @@ class GitFilterModel(param.Parameterized):
         return self.df_git.index.unique()
 
 class CommandFilterModel(param.Parameterized):
-    """Modèle pour filtrer les commandes sur la base du filtrage de Git et par commandes."""
+    """Modèle pour filtrer les commandes sur la base du filtrage de Git selon le code."""
     git_filter = param.ClassSelector(class_=GitFilterModel) 
     code = param.ListSelector(default=[], objects=[])
     df_exec = param.DataFrame(default=pd.DataFrame(), doc="DataFrame des exécutions filtrées")
-
 
     def __init__(self, **params):
         super().__init__(**params)
@@ -458,8 +457,12 @@ class Lvl2_Filter_Model(param.Parameterized):
         )
         return sel
 
-    def reset(self):
+    def reset_commands(self):
         self.value_commands = []
+        self._update_from_lvl1()
+        
+    def reset_sha1(self):
+        self.value_sha1 = []
         self._update_from_lvl1()
 
 ##################################################
@@ -518,6 +521,7 @@ class ConfigUniqueModel(param.Parameterized):
         """Renvoie le DataFrame des exécutions filtrées par la configuration unique."""
         df_exec = self.lv2_model.df_exec
         return df_exec[df_exec['Command_id'] == self.config].copy()
+    
 
 
 class ExecUniqueModel(param.Parameterized):
@@ -525,12 +529,9 @@ class ExecUniqueModel(param.Parameterized):
     Modèle pour gérer un exécution unique (lot de run de SNR différents) d'une configuration spécifique.
     """
     unique_conf_model = param.ClassSelector(class_=ConfigUniqueModel)
-
     log_hash = param.Selector(default=None, objects=[])   # valeur réelle (hash)
 
-    # ------------------------------------------------------------------
     # Mise à jour automatique quand le modèle parent change
-    # ------------------------------------------------------------------
     @param.depends('unique_conf_model.config', watch=True)
     def _update_exec(self):
         """Construit la liste des exécutions disponibles et met à jour le sélecteur."""
@@ -604,7 +605,7 @@ class ExecUniqueModel(param.Parameterized):
         if df_exec.empty:
             self.param['log_hash'].objects = {None: None}
             self.log_hash = None
-            return
+            return {}
 
         opts = (df_exec.reset_index()[['log_hash', 'Date_Execution', 'sha1']]
                 .drop_duplicates()
@@ -849,7 +850,6 @@ class GitIndicators(pn.viewable.Viewer):
     def __panel__(self):
         return pn.Row(self.commit_count, self.git_version_count, self.last_commit_text)
 
-
 ##################################### Niveau 2 : Commandes ####################################
 
 #################################
@@ -947,10 +947,7 @@ class Lvl2_Git_Selector(pn.viewable.Viewer):
 
     def clear_sha1(self, event=None):
         self.git_selector.value = []
-        
-        
-        
-# affichage de la sélection     
+  
 class TableConfig(pn.viewable.Viewer):
     lv2_filter = param.ClassSelector(class_=Lvl2_Filter_Model)
     
@@ -1026,15 +1023,14 @@ class ExecUniqueSelector(pn.viewable.Viewer):
         self.exec_selector = pn.widgets.Select(
             name="Choisir une exécution",
             options=[],
-            visible=False
         )
-
+        self._sync_selector_from_model()
         self.exec_selector.param.watch(self._sync_model_from_selector, "value")
 
     @param.depends('execUniqueModel.log_hash', watch=True)
     def _sync_selector_from_model(self):
         """Synchronise le widget avec le modèle."""
-        if self._syncing or self.execUniqueModel is None:
+        if self._syncing:
             return
 
         self._syncing = True
@@ -1048,7 +1044,6 @@ class ExecUniqueSelector(pn.viewable.Viewer):
                                    if val == current_hash), None)
 
             self.exec_selector.value = label_selected
-            self.exec_selector.visible = bool(label_map)
 
         finally:
             self._syncing = False
@@ -1067,7 +1062,6 @@ class ExecUniqueSelector(pn.viewable.Viewer):
 
     def __panel__(self):
         return self.exec_selector
-
 
 # ------------------------------------------------------------------
 # Affichage d'une execution
@@ -1098,9 +1092,7 @@ class ExecutionColumn(pn.viewable.Viewer):
 
     def __panel__(self):
         return self.layout
-
-
-
+    
 # ------------------------------------------------------------------
 # Affichage des journeaux d'exec
 # ------------------------------------------------------------------
@@ -1119,11 +1111,9 @@ class LogViewer(pn.viewable.Viewer):
         # Affichage du sélecteur et des onglets
         return self.output_pane
 
-
 # ------------------------------------------------------------------
-# Graphe de tâches
+# Graphe des tâches
 # ------------------------------------------------------------------
-
 class Tasks_Histogramme(pn.viewable.Viewer):
     # Paramètres configurables
     unique_exec_model = param.ClassSelector(class_=ExecUniqueModel, doc="Selecteur de configurations uniques")
@@ -1326,7 +1316,6 @@ class PanelCommit(pn.viewable.Viewer):
 # ------------------------------------------------------------------
 # Paramêtre du site
 # ------------------------------------------------------------------
-
 noiseScale = NoiseScale(noise_label= noise_label)
 
 # ------------------------------------------------------------------
