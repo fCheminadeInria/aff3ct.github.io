@@ -74,11 +74,11 @@ def load_data_sync() -> None:
     fmt='json'
     
     tables = [
+        'git',
         'command',
         'parameters',
         'exec',
         'runs',
-        'git',
     ]
     db = dict()
     for table in tables:
@@ -99,11 +99,10 @@ def load_data_sync() -> None:
         db['command'].index.astype(str) + " : " +
         db['command']['Command_short'].astype(str)
     )
-
-    df = db['command'][['Config_Alias']].drop_duplicates()
-    db['config_aliases'] = df['Config_Alias'].to_dict()
-
+    
     db['exec'].set_index('log_hash', inplace=True)
+    db['exec']['Date_Execution'] = pd.to_datetime(db['exec']['Date_Execution'], unit='ms', errors='coerce')
+    db['exec']["alias"] = db['exec']['EXEC_id'] + " : " + db['exec']['Date_Execution'].dt.strftime('%Y-%m-%d %H:%M:%S, (Sha1 : ') +  db['exec']['sha1']  + ")"
 
     pn.state.cache['db'] = db
 
@@ -117,11 +116,6 @@ def load_data_sync() -> None:
 
 def apply_typing_code():
     ''' Applique le typage des données  (copier coller du résultat de generate_typing_code) ''' 
-    # Typage pour commands
-    df_exec = pn.state.cache['db']['exec']
-    df_exec['Date_Execution'] = pd.to_datetime(df_exec['Date_Execution'], errors='coerce')
-    pn.state.cache['db']['exec'] = df_exec
-
     # Typage pour runs
     runs = pn.state.cache['db']['runs']
     runs['Bit Error Rate (BER) and Frame Error Rate (FER).BE'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).BE'], errors='coerce').astype('Int64')
@@ -221,6 +215,96 @@ def init_dashboard():
 
     print("✅ init_dashboard() terminé")
     return template
+
+# ------------------------------------------------------------------------------
+#  Fonctions utilitaires
+# ------------------------------------------------------------------------------
+
+def command_alias_to_command_id(alias: str) -> str:
+    """
+    Convertit un alias de configuration en Command_id.
+    
+    Args:
+        alias (str): L'alias de la configuration.
+        
+    Returns:
+        str: Le Command_id correspondant ou None si non trouvé.
+    """
+    db = pn.state.cache.get('db', {})
+    df = db.get('command', pd.DataFrame())
+    
+    if df.empty or 'Config_Alias' not in df.columns:
+        return None
+    
+    match = df[df['Config_Alias'] == alias]
+    if not match.empty:
+        return match.index[0]  # Renvoie le Command_id
+    else:
+        return None
+
+def command_id_to_alias(command_id: str) -> str:
+    """
+    Convertit un Command_id en alias de configuration.
+    
+    Args:
+        command_id (str): Le Command_id de la configuration.
+        
+    Returns:
+        str: L'alias de la configuration ou None si non trouvé.
+    """
+    db = pn.state.cache.get('db', {})
+    df = db.get('command', pd.DataFrame())
+    
+    if df.empty or 'Config_Alias' not in df.columns:
+        return None
+    
+    if command_id in df.index:
+        return df.loc[command_id, 'Config_Alias']
+    else:
+        return None
+
+def exec_alias_to_log_hash(alias: str) -> str:
+    """
+    Convertit un alias d'exécution en log_hash.
+    
+    Args:
+        alias (str): L'alias de l'exécution.
+        
+    Returns:
+        str: Le log_hash correspondant ou None si non trouvé.
+    """
+    db = pn.state.cache.get('db', {})
+    df_exec = db.get('exec', pd.DataFrame())
+    
+    if df_exec.empty or 'alias' not in df_exec.columns:
+        return None
+    
+    match = df_exec[df_exec['alias'] == alias]
+    if not match.empty:
+        return match.index[0]  # Renvoie le log_hash
+    else:
+        return None
+    
+def exec_log_hash_to_alias(log_hash: str) -> str:
+    """
+    Convertit un log_hash en alias d'exécution.
+    
+    Args:
+        log_hash (str): Le log_hash de l'exécution.
+        
+    Returns:
+        str: L'alias de l'exécution ou None si non trouvé.
+    """
+    db = pn.state.cache.get('db', {})
+    df_exec = db.get('exec', pd.DataFrame())
+    
+    if df_exec.empty or 'alias' not in df_exec.columns:
+        return None
+    
+    if log_hash in df_exec.index:
+        return df_exec.loc[log_hash, 'alias']
+    else:
+        return None    
 
 ##################################### Niveau Global ####################################
 
@@ -482,25 +566,10 @@ class ConfigUniqueModel(param.Parameterized):
     def options_alias(self):
         return self.lv2_model.df_commands['Config_Alias'].tolist()
 
-
     def alias(self):
-        if (
-            self.config is None or
-            self.config not in self.lv2_model.df_exec['Command_id'].values
-        ):
+        if self.config is None or self.config not in self.lv2_model.df_exec['Command_id'].values :
             return None
-        
-        db = pn.state.cache.get('db', {})
-        return db['command'].loc[self.config, 'Config_Alias']
-
-    def config_by_alias(self, alias):
-        db = pn.state.cache.get('db', {})
-        df = db.get('command', pd.DataFrame())
-        match = df[df['Config_Alias'] == alias]
-        if not match.empty:
-            return match.index[0]  # Renvoie le Command_id
-        else:
-            return None
+        return command_id_to_alias (self.config)
 
     @param.depends('lv2_model.value_commands', 'lv2_model.value_sha1', watch=True)
     def _on_lvl2_df_change(self):
@@ -519,6 +588,7 @@ class ExecUniqueModel(param.Parameterized):
     """
     unique_conf_model = param.ClassSelector(class_=ConfigUniqueModel)
     log_hash = param.Selector(default=None, objects=[])   # valeur réelle (hash)
+    trig_opt_changed = param.Event()
 
     # Mise à jour automatique quand le modèle parent change
     @param.depends('unique_conf_model.config', watch=True)
@@ -529,11 +599,13 @@ class ExecUniqueModel(param.Parameterized):
         if df_exec.empty:
             self.param['log_hash'].objects = {None: None}
             self.log_hash = None
-            return
-        #mise à jour des options
-        self.param['log_hash'].objects = df_exec.index.to_list()
-        # Sélectionner la première exécution par défaut
-        self.log_hash = self.param['log_hash'].objects[0]
+        else:
+            #mise à jour des options
+            self.param['log_hash'].objects = df_exec.index.to_list()
+            # Sélectionner la première exécution par défaut
+            if self.log_hash is None or self.log_hash not in self.param['log_hash'].objects[0]:
+                self.log_hash = self.param['log_hash'].objects[0]    
+        self.trig_opt_changed = True
             
     @property
     def df_runs(self):
@@ -572,37 +644,7 @@ class ExecUniqueModel(param.Parameterized):
     @property
     def options(self):
         """Liste des labels d'exécution disponibles pour la sélection."""
-        df_exec = self.unique_conf_model.df_exec
-        
-        if df_exec.empty:
-            self.param['log_hash'].objects = {None: None}
-            self.log_hash = None
-            return
-
-        opts = (df_exec.reset_index()[['log_hash', 'Date_Execution', 'sha1']]
-                .drop_duplicates()
-                .sort_values('Date_Execution')
-                .reset_index(drop=True))
-        opts['label'] = opts['sha1'] + "_" + opts['Date_Execution'].dt.strftime('%Y-%m-%d %H:%M:%S') 
-        
-        
-        return opts['label'].to_list()
-
-    @property
-    def label_map(self):
-        df_exec = self.unique_conf_model.df_exec
-        if df_exec.empty:
-            self.param['log_hash'].objects = {None: None}
-            self.log_hash = None
-            return {}
-
-        opts = (df_exec.reset_index()[['log_hash', 'Date_Execution', 'sha1']]
-                .drop_duplicates()
-                .sort_values('Date_Execution')
-                .set_index('log_hash')
-                )                
-        opts['label'] = opts['sha1'] + "_" + opts['Date_Execution'].dt.strftime('%Y-%m-%d %H:%M:%S') 
-        return opts['label'].to_dict()
+        return self.unique_conf_model.df_exec['alias'].tolist()
 
     @property
     def log(self):
@@ -1047,7 +1089,7 @@ class ConfigUniqueSelector(pn.viewable.Viewer):
     def _sync_model_from_selector(self, event):
         """Binde la sélection (alias) vers le model.value."""
         if event.new:
-            self.model.config = self.model.config_by_alias(event.new)
+            self.model.config = command_alias_to_command_id(event.new)
 
     @param.depends('model.config', 'model.options', watch=True)
     def _sync_selector_from_model(self, event=None):
@@ -1077,7 +1119,7 @@ class ExecUniqueSelector(pn.viewable.Viewer):
         self._sync_selector_from_model()
         self.exec_selector.param.watch(self._sync_model_from_selector, "value")
 
-    @param.depends('execUniqueModel.log_hash', watch=True)
+    @param.depends('execUniqueModel.log_hash', 'execUniqueModel.trig_opt_changed', watch=True)
     def _sync_selector_from_model(self):
         """Synchronise le widget avec le modèle."""
         if self._syncing:
@@ -1085,9 +1127,9 @@ class ExecUniqueSelector(pn.viewable.Viewer):
 
         self._syncing = True
         try:
-            label_map = self.execUniqueModel.label_map  # dict {log_hash : label}
-            self.exec_selector.options = list(label_map.keys())
-            self.exec_selector.value = label_map[self.execUniqueModel.log_hash] if self.execUniqueModel.log_hash else None
+            label_map = self.execUniqueModel.options
+            self.exec_selector.options = self.execUniqueModel.options
+            self.exec_selector.value = exec_log_hash_to_alias(self.execUniqueModel.log_hash) if self.execUniqueModel.log_hash else None
 
         finally:
             self._syncing = False
@@ -1100,7 +1142,7 @@ class ExecUniqueSelector(pn.viewable.Viewer):
         self._syncing = True
         try:
             selected_label = event.new
-            self.execUniqueModel.log_hash = self.execUniqueModel.label_map.get(selected_label, None)
+            self.execUniqueModel.log_hash = exec_alias_to_log_hash(selected_label)
         finally:
             self._syncing = False
 
