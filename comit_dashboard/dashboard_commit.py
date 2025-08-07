@@ -679,42 +679,49 @@ class DateRangeFilter(pn.viewable.Viewer):
 
 class PerformanceByCommit(pn.viewable.Viewer):
     command_filter = param.ClassSelector(class_=CommandFilterModel)
-    
+
     def __init__(self, **params):
         super().__init__(**params)
 
         self.plot_throughput_pane = pn.pane.Plotly(sizing_mode='stretch_width')
         self.plot_latency_pane = pn.pane.Plotly(sizing_mode='stretch_width')
-             
-        self._update_all()
-        
+
         self.tabs = pn.Tabs(
             ('⏱️ Latence', self.plot_latency_pane),
-            ('⏱️ Débit', self.plot_throughput_pane),
+            ('📶 Débit', self.plot_throughput_pane),
+            dynamic=True
         )
-        
-    @param.depends('command_filter.df_exec', watch=True)
+
+        self.command_filter.param.watch(self._update_all, ['df_exec'])
+
+        self._update_all()
+
+    def __panel__(self):
+        return self.tabs
+
     def _update_all(self, *events):
         self._update_data()
         self._create_plots()
-        self.plot_throughput_pane.object = self.fig_throughput
-        self.plot_latency_pane.object = self.fig_latency
 
     def _update_data(self):
-        # Aggrégation des données par commit et par type de code
         throughput_col = 'Global throughputand elapsed time.SIM_THR(Mb/s)'
         latency_col = 'Global throughputand elapsed time.elapse_time(ns)'
-        
+
         db = pn.state.cache['db']
         df_exec = self.command_filter.df_exec
+
+        if df_exec.empty:
+            # Crée un DataFrame vide avec colonnes attendues
+            self.df_grouped = pd.DataFrame(columns=['sha1', 'Code', 'Débit moyen (Mb/s)', 'Latence moyenne (ns)', 'date'])
+            return
 
         df_exec = df_exec.merge(
             db['git'][['date']], left_on='sha1', right_index=True, how='inner'
         )
-        df = db['runs'].merge(df_exec[['Command_id', 'sha1', 'date', 'code']], on='log_hash', how='left')
+        df = db['runs'].merge(
+            df_exec[['Command_id', 'sha1', 'date', 'code']], on='log_hash', how='left'
+        ).sort_values(by='date')
 
-        df = df.sort_values(by=['date'])
-        
         self.df_grouped = df.groupby(['sha1', 'code']).agg({
             throughput_col: 'mean',
             latency_col: 'mean',
@@ -722,40 +729,45 @@ class PerformanceByCommit(pn.viewable.Viewer):
         }).reset_index().rename(columns={
             throughput_col: 'Débit moyen (Mb/s)',
             latency_col: 'Latence moyenne (ns)',
-            'code' : 'Code',
-        }).sort_values(by=['date'])
+            'code': 'Code',
+        }).sort_values(by='date')
 
     def _create_plots(self):
-        self.fig_throughput = px.line(
+        self.plot_throughput_pane.object = px.line(
             self.df_grouped,
             x='date', y='Débit moyen (Mb/s)',
             color='Code',
             title="Débit moyen par commit (par code)",
             markers=True
-        )
-        self.fig_throughput.update_layout(
+        ).update_layout(
             legend=dict(orientation='v', y=1, x=1.05),
             margin=dict(r=100),
             xaxis=dict(title="Date", rangeslider=dict(visible=True), showgrid=True),
             yaxis=dict(title="Débit moyen (Mb/s)", showgrid=True),
         )
+        if self.df_grouped.empty:
+            self.plot_throughput_pane.object.add_annotation(text="Aucune donnée sélectionnée",
+                                                    xref="paper", yref="paper",
+                                                    x=0.5, y=0.5, showarrow=False)
 
-        self.fig_latency = px.line(
+
+        self.plot_latency_pane.object = px.line(
             self.df_grouped,
             x='date', y='Latence moyenne (ns)',
             color='Code',
             title="Latence moyenne par commit (par code)",
             markers=True
-        )
-        self.fig_latency.update_layout(
+        ).update_layout(
             legend=dict(orientation='v', y=1, x=1.05),
             margin=dict(r=100),
             xaxis=dict(title="Date", rangeslider=dict(visible=True), showgrid=True),
             yaxis=dict(title="Latence moyenne (ns)", showgrid=True),
         )
+        if self.df_grouped.empty:
+            self.plot_latency_pane.object.add_annotation(text="Aucune donnée sélectionnée",
+                                                    xref="paper", yref="paper",
+                                                    x=0.5, y=0.5, showarrow=False)
 
-    def __panel__(self):
-        return self.tabs
 
 ##########################
 ## Sélecteur de code ##
