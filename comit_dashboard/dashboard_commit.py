@@ -175,6 +175,10 @@ def init_dashboard():
 
     panelData = pn.Column(
         pn.indicators.Number(
+        name="Commit en base",
+        value=db['git'].shape[0] if not db['git'].empty else 0
+        ),
+        pn.indicators.Number(
         name="Commands en base",
         value=db['command'].shape[0] if not db['command'].empty else 0
         ), 
