@@ -1244,14 +1244,8 @@ class PerformanceBERFERPlot(pn.viewable.Viewer):
     
     def __init__(self, **params):
         super().__init__(**params)
-
-        self.warning = pn.pane.Markdown("Veuillez sélectionner au moins une exécution.")
-        self.warning.visible = False
-
         self.plot_pane = pn.pane.Plotly(sizing_mode="stretch_width")
-        self.plot_pane.visible = False
-
-        self.view = pn.Column(self.warning, self.plot_pane)
+        self.view = self.plot_pane
 
         # Initialisation + lien des callbacks
         self._update_plot()
@@ -1263,13 +1257,25 @@ class PerformanceBERFERPlot(pn.viewable.Viewer):
 
     def _update_plot(self, *_):
         df_runs = self.lvl2_model.df_runs
+        
         if df_runs.empty:
-            self.plot_pane.visible = False
-            self.warning.visible = True
-            return
 
-        self.plot_pane.visible = True
-        self.warning.visible = False
+            fig = go.Figure()
+            fig.add_annotation(
+                text="⚠️ Aucune exécution sélectionnée ou disponible.",
+                xref="paper", yref="paper",
+                x=0.5, y=0.5, showarrow=False,
+                font=dict(size=20),
+                align="center"
+            )
+            fig.update_layout(
+                template="plotly_white",
+                xaxis=dict(visible=False),
+                yaxis=dict(visible=False),
+                height=600
+            )
+            self.plot_pane.object = fig
+            return
 
         noiseScale = self.noise_scale_param.value
         df_runs = df_runs.sort_values(by=noiseScale, ascending=True)
