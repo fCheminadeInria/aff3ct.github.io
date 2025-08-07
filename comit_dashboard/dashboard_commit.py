@@ -1227,33 +1227,40 @@ class Tasks_Histogramme(pn.viewable.Viewer):
 # Performance BER/FER par niveau de bruit (lvl2)
 # ------------------------------------------------------------------
 class PerformanceBERFERPlot(pn.viewable.Viewer):
-    
     lvl2_model = param.ClassSelector(class_=Lvl2_Filter_Model, doc="Modèle de filtrage de niveau 2")
     noise_scale_param = param.ClassSelector(class_=NoiseScale, doc="Paramètre de niveau de bruit")
     
     def __init__(self, **params):
         super().__init__(**params)
-        self._update_fig()
+
+        self.warning = pn.pane.Markdown("Veuillez sélectionner au moins une exécution.")
+        self.warning.visible = False
+
+        self.plot_pane = pn.pane.Plotly(sizing_mode="stretch_width")
+        self.plot_pane.visible = False
+
+        self.view = pn.Column(self.warning, self.plot_pane)
+
+        # Initialisation + lien des callbacks
+        self._update_plot()
+        self.lvl2_model.param.watch(self._update_plot, ['value_commands', 'value_sha1'])
+        self.noise_scale_param.param.watch(self._update_plot, ['value'])
 
     def __panel__(self):
-        return self._update_fig
+        return self.view
 
-    @pn.depends('lvl2_model.value_commands', 'lvl2_model.value_sha1', 'noise_scale_param.value', watch=True)
-    def _update_fig(self):
-        if self.lvl2_model.df_exec.empty:
-            return pn.pane.Markdown("Veuillez sélectionner au moins une execution.")
-        return self.plot_performance_metrics_plotly()
-
-    # Performance par niveau de bruit pour les configurations sélectionnées
-    def plot_performance_metrics_plotly(self):
-        # Si aucune configuration n'est sélectionnée
+    def _update_plot(self, *_):
         df_runs = self.lvl2_model.df_runs
-        
+        if df_runs.empty:
+            self.plot_pane.visible = False
+            self.warning.visible = True
+            return
+
+        self.plot_pane.visible = True
+        self.warning.visible = False
+
         noiseScale = self.noise_scale_param.value
-            
         df_runs = df_runs.sort_values(by=noiseScale, ascending=True)
-        
-        fig = go.Figure()
 
         # Ajouter la colonne clé (couple Command_id + sha1)
         df_runs['cmd_sha'] = (
@@ -1263,6 +1270,8 @@ class PerformanceBERFERPlot(pn.viewable.Viewer):
 
         grouped = df_runs.groupby('cmd_sha')
         colors = px.colors.qualitative.Plotly[:len(grouped)]
+
+        fig = go.Figure()
 
         for (key, grp), color in zip(grouped, colors):
             snr = grp[noiseScale]
@@ -1295,12 +1304,12 @@ class PerformanceBERFERPlot(pn.viewable.Viewer):
                 title=f"Niveau de Bruit (SNR) : {noiseScale}",
                 rangeslider=dict(visible=True),
                 rangeselector=dict(
-                    buttons=list([
+                    buttons=[
                         dict(count=1, label="1dB", step="all", stepmode="backward"),
                         dict(count=5, label="5dB", step="all", stepmode="backward"),
                         dict(count=10, label="10dB", step="all", stepmode="backward"),
                         dict(step="all")
-                    ])
+                    ]
                 )
             ),
             yaxis=dict(title="Taux d'Erreur", type='log'),
@@ -1310,8 +1319,9 @@ class PerformanceBERFERPlot(pn.viewable.Viewer):
             showlegend=True,
             margin=dict(t=70, b=50, l=50, r=10)
         )
-        
-        return pn.pane.Plotly(fig, sizing_mode="stretch_width")
+
+        self.plot_pane.object = fig
+
 
 # ------------------------------------------------------------------
 # Assemblage du panel git
