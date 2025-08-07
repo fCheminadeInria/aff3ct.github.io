@@ -3,13 +3,11 @@ settings.resources = 'inline'
 
 import pandas as pd
 import panel as pn
-import re
 import plotly.graph_objs as go
 import plotly.express as px
 import plotly.graph_objects as go
 import param
 import unicodedata as ud
-import itertools
 from io import BytesIO
 import sys
 import os
@@ -27,7 +25,7 @@ except ImportError:
 IS_PYODIDE       = sys.platform == "emscripten"
 IS_PANEL_CONVERT = os.getenv("PANEL_CONVERT") == "1"
 GITLAB_PACKAGE_URL = "https://gitlab.inria.fr/api/v4/projects/1420/packages/generic/gitlab-elk-export/latest/"
-
+BUTON_WIDTH = 60
 # ------------------------------------------------------------------------------
 #  Chargement des données – SYNCHRONE
 # ------------------------------------------------------------------------------
@@ -169,8 +167,8 @@ def init_dashboard():
 
     panelConfig = pn.Row(
         pn.Column(
-            config_panel,
             TableConfig(lv2_filter=lvl2_filter),
+            config_panel,
             Lvl2_Git_Selector(lv2_model=lvl2_filter),
             pn.Tabs(
                 ('BER/FER', PerformanceBERFERPlot(lvl2_model = lvl2_filter, noise_scale_param=noiseScale))),
@@ -210,7 +208,7 @@ def init_dashboard():
         panelCommit,
         pn.pane.HTML("<h2>☎️ Niveau 2 : BER / FER</h2>"),
         panelConfig,
-        pn.pane.HTML("<h2>⚙️ Niveau 3 : Analyse à la commande</h2>"),
+        pn.pane.HTML("<h2>⚙️ Niveau 3 : Analyse par exécutions</h2>"),
         panel_par_config,
         sizing_mode="stretch_width"
     )
@@ -471,6 +469,7 @@ class Lvl2_Filter_Model(param.Parameterized):
 class ConfigUniqueModel(param.Parameterized):
     lv2_model = param.ClassSelector(default=None, class_=Lvl2_Filter_Model)
     config = param.Selector(default=None, objects=[])
+    options = param.ListSelector(default=[], objects=[])
 
     @property
     def df(self):
@@ -493,9 +492,9 @@ class ConfigUniqueModel(param.Parameterized):
     def alias(self):
         if (
             self.config is None or
-            self.config not in self.lv2_model.df_exec.index
+            self.config not in self.lv2_model.df_exec['Command_id'].values
         ):
-            return '-'
+            return None
         
         db = pn.state.cache.get('db', {})
         return db['command'].loc[self.config, 'Config_Alias']
@@ -511,13 +510,8 @@ class ConfigUniqueModel(param.Parameterized):
 
     @param.depends('lv2_model.value_commands', 'lv2_model.value_sha1', watch=True)
     def _on_lvl2_df_change(self):
-        opts = self.lv2_model.df_commands.index.tolist()
         # Initialise la valeur avec le command_id correspondant au premier alias
-        if self.config not in opts :
-            self.config = opts[0] if opts else None
-        self.param['config'].objects = opts
-
-
+        self.options = self.lv2_model.df_commands.index.tolist()
 
     @property
     def df_exec(self):
@@ -787,45 +781,19 @@ class CodeSelector(pn.viewable.Viewer):
         db = pn.state.cache['db']
         self.widget.options = self.cmd_filter_model.param.code.objects
         self.widget.value = self.cmd_filter_model.param['code'].default  # Affecte la valeur par défaut des codes     
-        # self.widget.param.watch(self._update_filter, 'value')
+        self.widget.param.watch(self._update_filter, 'value')
         
-        self.select_all_button = pn.widgets.Button(name='Sélectionner tout', button_type='primary')
+        self.select_all_button = pn.widgets.Button(name='🔄', button_type='primary', width = BUTON_WIDTH)
         self.select_all_button.on_click(self.select_all_codes)
-        
-        self.deselect_all_button = pn.widgets.Button(name='Désélectionner tout', button_type='danger')
-        self.deselect_all_button.on_click(self.deselect_all_codes)
-        
-        self.apply_button = pn.widgets.Button(name='Appliquer les filtres', button_type='success') 
-        self.apply_button.on_click(self._update_filter) 
 
-        self.spinner = pn.indicators.LoadingSpinner(value=False, width=25)
-        
     def select_all_codes(self, event):
         self.widget.value = self.widget.options
-
-    def deselect_all_codes(self, event):
-        self.widget.value = []
 
     def _update_filter(self, event):
         self.cmd_filter_model.code = self.widget.value
         
-        self.spinner.value = True
-
-        try:
-            self.cmd_filter_model.code = self.widget.value
-        finally:
-            self._set_interactive(True)
-            self.spinner.value = False
-
-    def _set_interactive(self, active: bool):
-        """Active ou désactive les interactions"""
-        self.widget.disabled = not active
-        self.select_all_button.disabled = not active
-        self.deselect_all_button.disabled = not active
-        self.apply_button.disabled = not active
-
     def __panel__(self):
-        return pn.Row(self.select_all_button, self.deselect_all_button, self.widget, self.apply_button, self.spinner)
+        return pn.Row(self.widget, self.select_all_button, sizing_mode="stretch_width")
     
 ##############################
 ## Table des commits Git ##
@@ -895,22 +863,19 @@ class Lvl2_ConfigPanel(pn.viewable.Viewer):
 
     def __init__(self, **params):
         super().__init__(**params)
-        self.config_selector = pn.widgets.MultiChoice(name="Sélectionnez les configurations", options=[])
-        self.select_all_button = pn.widgets.Button(name="Tout sélectionner", button_type="success")
-        self.clear_button = pn.widgets.Button(name="Tout désélectionner", button_type="warning")
+        self.config_selector = pn.widgets.MultiChoice(name="Sélectionnez les configurations", options=[], sizing_mode="stretch_width")
+        self.clear_button = pn.widgets.Button(name="🔄", button_type="warning", width = BUTON_WIDTH)
         self.dialog = pn.pane.Alert(alert_type="danger", visible=False, sizing_mode="stretch_width")
 
-        self.select_all_button.on_click(self.select_all_configs)
         self.clear_button.on_click(self.clear_configs)
 
         self.config_selector.param.watch(self._check_selection_limit, 'value')
         self._update_options()
         
     def __panel__(self):
-        return pn.Column(
-            self.select_all_button,
-            self.clear_button,
+        return pn.Row(
             self.config_selector,
+            self.clear_button,
             self.dialog
         )
 
@@ -918,7 +883,6 @@ class Lvl2_ConfigPanel(pn.viewable.Viewer):
     def _update_options(self, *events):
         options = self.lv2_model.options["Config_Alias"].tolist()
         self.config_selector.options = options
-        self.select_all_button.disabled = len(options) > MAX_SELECTION
 
     def _check_selection_limit(self, event):
         selected = event.new
@@ -930,12 +894,6 @@ class Lvl2_ConfigPanel(pn.viewable.Viewer):
             df = pn.state.cache['db']['command']
             self.lv2_model.value_commands = df[df["Config_Alias"].isin(selected)].index.tolist()
 
-    def select_all_configs(self, event=None):
-        if len(self.config_selector.options) > MAX_SELECTION:
-            self.dialog.open(f"⚠️ Plus de {MAX_SELECTION} configurations. Filtrez avant de tout sélectionner.")
-        else:
-            self.config_selector.value = self.config_selector.options
-
     def clear_configs(self, event=None):
         self.config_selector.value = []
 
@@ -944,9 +902,9 @@ class Lvl2_Git_Selector(pn.viewable.Viewer):
     
     def __init__(self, **params):
         super().__init__(**params)
-        self.git_selector = pn.widgets.MultiChoice(name="Sélectionnez les commits", options=[])
-        self.select_all_button = pn.widgets.Button(name="Tout sélectionner", button_type="success")
-        self.clear_button = pn.widgets.Button(name="Tout désélectionner", button_type="warning")
+        self.git_selector = pn.widgets.MultiChoice(name="Sélectionnez les commits", options=[], sizing_mode="stretch_width")
+        self.select_all_button = pn.widgets.Button(name="Tout", button_type="success" , width = BUTON_WIDTH)
+        self.clear_button = pn.widgets.Button(name="🔄", button_type="warning", width = BUTON_WIDTH)
         self.dialog = pn.pane.Alert(alert_type="danger", visible=False, sizing_mode="stretch_width")
 
         self.select_all_button.on_click(self.select_all_sha1)
@@ -957,10 +915,12 @@ class Lvl2_Git_Selector(pn.viewable.Viewer):
         self._update_options()
         
     def __panel__(self):
-        return pn.Column(
-            self.select_all_button,
-            self.clear_button,
+        return pn.Row(
             self.git_selector,
+            pn.Column(
+                self.select_all_button,
+                self.clear_button
+            ),
             self.dialog
         )
 
@@ -1017,7 +977,7 @@ class TableConfig(pn.viewable.Viewer):
 ##################################### Niveau 3 : Commande ####################################
 
 # ------------------------------------------------------------------
-# Gestion des données niveau 3 sélection unique
+# Filtres des données niveau 3
 # ------------------------------------------------------------------
 
 class ConfigUniqueSelector(pn.viewable.Viewer):
@@ -1028,38 +988,30 @@ class ConfigUniqueSelector(pn.viewable.Viewer):
 
         # RadioBoxGroup initialisé avec les alias disponibles
         self.selector = pn.widgets.RadioBoxGroup(
-            name='Configurations',
+            name='Commandes',
             options=self.model.options_alias,
-            value=self.model.alias() if self.model.alias() != '-' else None,
+            value=self.model.alias(),
             inline=False
         )
 
         # Lorsque l'utilisateur change la sélection, on met à jour self.model.value
         self.selector.param.watch(self._sync_model_from_selector, 'value')
-
+        
     def _sync_model_from_selector(self, event):
         """Binde la sélection (alias) vers le model.value."""
         if event.new:
-            self.model.config_by_alias(event.new)
-        else:
-            self.model.value = None
+            self.model.config = self.model.config_by_alias(event.new)
 
-    @param.depends('model.config', watch=True)
+    @param.depends('model.config', 'model.options', watch=True)
     def _sync_selector_from_model(self, event=None):
-        alias = self.model.alias()
-        opts = self.model.options_alias
-        self.selector.options  = opts
-        # Si l'alias du model n'est pas dans les options, on désactive
-        if not alias == '-':
-            self.selector.value = alias
-            self.selector.disabled = False
-        else:
-            self.selector.value = None
-            self.selector.disabled = True
-
+        self.selector.options  = self.model.options_alias
+        self.selector.value = self.model.alias()
+        if self.selector.value is None:
+            self.selector.value = self.model.options_alias[0] if self.model.options_alias else None
+        
     def __panel__(self):
         return pn.Column(
-            pn.pane.Markdown("**Configurations :**"),
+            pn.pane.Markdown("**Choisir une commandes :**"),
             self.selector
         )
 
@@ -1072,7 +1024,7 @@ class ExecUniqueSelector(pn.viewable.Viewer):
         self._syncing = False  # évite les boucles de synchronisation
 
         self.exec_selector = pn.widgets.Select(
-            name="Choix d'exécution",
+            name="Choisir une exécution",
             options=[],
             visible=False
         )
