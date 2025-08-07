@@ -157,36 +157,27 @@ def init_dashboard():
 
     db = pn.state.cache['db']
 
-    git_filter = GitFilterModel(df_git=db['git'])
+    git_model = GitFilterModel(df_git=db['git'])
 
-    command_filter = CommandFilterModel(git_filter=git_filter)
-    panelCommit = PanelCommit(command_filter=command_filter, git_filter=git_filter)
+    command_model = CommandFilterModel(git_filter=git_model)
+    panelCommit = PanelCommit(command_filter=command_model, git_filter=git_model)
 
-    lvl2_filter = Lvl2_Filter_Model(command_filter=command_filter)
-    config_panel = Lvl2_ConfigPanel(lv2_model=lvl2_filter)
+    lvl2_model = Lvl2_Filter_Model(command_filter=command_model)
+    config_panel = Lvl2_ConfigPanel(lv2_model=lvl2_model)
 
     panelConfig = pn.Row(
         pn.Column(
-            TableConfig(lv2_filter=lvl2_filter),
+            TableConfig(lvl2_model=lvl2_model),
             config_panel,
-            Lvl2_Git_Selector(lv2_model=lvl2_filter),
+            Lvl2_Git_Selector(lv2_model=lvl2_model),
             pn.Tabs(
-                ('BER/FER', PerformanceBERFERPlot(lvl2_model = lvl2_filter, noise_scale_param=noiseScale))),
+                ('BER/FER', PerformanceBERFERPlot(lvl2_model = lvl2_model, noise_scale_param=noiseScale))),
             sizing_mode="stretch_width"
         )
     )
 
-    unique_model = ConfigUniqueModel(lv2_model=lvl2_filter)
 
-    panel_par_config = pn.Column(
-        ConfigUniqueSelector(name="One Configuration Selection", model= unique_model),
-        pn.Row(
-            ExecutionColumn(exec_model=ExecUniqueModel(unique_conf_model=unique_model), name="Execution 1", noise_scale=noiseScale),
-            ExecutionColumn(exec_model=ExecUniqueModel(unique_conf_model=unique_model), name="Execution 2", noise_scale=noiseScale),
-            sizing_mode="stretch_width"
-        ),
-        sizing_mode="stretch_width"
-    )
+    lvl3 = Level3(lvl2_model=lvl2_model)
 
     panelData = pn.Column(
         pn.indicators.Number(
@@ -209,7 +200,7 @@ def init_dashboard():
         pn.pane.HTML("<h2>☎️ Niveau 2 : BER / FER</h2>"),
         panelConfig,
         pn.pane.HTML("<h2>⚙️ Niveau 3 : Analyse par exécutions</h2>"),
-        panel_par_config,
+        lvl3,
         sizing_mode="stretch_width"
     )
 
@@ -522,8 +513,6 @@ class ConfigUniqueModel(param.Parameterized):
         df_exec = self.lv2_model.df_exec
         return df_exec[df_exec['Command_id'] == self.config].copy()
     
-
-
 class ExecUniqueModel(param.Parameterized):
     """
     Modèle pour gérer un exécution unique (lot de run de SNR différents) d'une configuration spécifique.
@@ -654,8 +643,6 @@ class ExecUniqueModel(param.Parameterized):
                 return f"❌ Erreur inattendue : {str(e)}"
 
         return all_data.getvalue().decode('utf-8', errors='replace')
-
-
 
 ##################################### Niveau 1 : Git et perf global ####################################
 
@@ -826,8 +813,8 @@ class GitIndicators(pn.viewable.Viewer):
     def __init__(self, **params):
         super().__init__(**params)
 
-        self.commit_count = pn.indicators.Number(name="Commits historisés dans Git", value=0)
-        self.git_version_count = pn.indicators.Number(name="Commits avec des données", value=0)
+        self.commit_count = pn.indicators.Number(name="Commits Sélectionnés", value=0)
+        self.git_version_count = pn.indicators.Number(name="avec données", value=0)
         self.last_commit_text = pn.widgets.StaticText(name="Date du dernier commit")
 
         # Écoute uniquement les changements de filtre Git
@@ -950,7 +937,7 @@ class Lvl2_Git_Selector(pn.viewable.Viewer):
         self.git_selector.value = []
   
 class TableConfig(pn.viewable.Viewer):
-    lv2_filter = param.ClassSelector(class_=Lvl2_Filter_Model)
+    lvl2_model = param.ClassSelector(class_=Lvl2_Filter_Model)
     
     def __init__(self, **params):
         super().__init__(**params)
@@ -959,13 +946,13 @@ class TableConfig(pn.viewable.Viewer):
     def __panel__(self):
         return pn.Accordion( ("Configurations sélectionnées", self.tab))
     
-    @param.depends('lv2_filter.value_commands', 'lv2_filter.value_sha1', watch=True)
+    @param.depends('lvl2_model.value_commands', 'lvl2_model.value_sha1', watch=True)
     def _update_table(self, event=None):
         self.tab.object = self._prepare()
 
     def _prepare(self):
         db = pn.state.cache['db']
-        df_filtered = self.lv2_filter.df_commands[['param_id']].merge(
+        df_filtered = self.lvl2_model.df_commands[['param_id']].merge(
             db['parameters'], 
             left_on='param_id', 
             right_index=True
@@ -977,6 +964,56 @@ class TableConfig(pn.viewable.Viewer):
 # ------------------------------------------------------------------
 # Filtres des données niveau 3
 # ------------------------------------------------------------------
+
+class Level3(pn.viewable.Viewer):
+    lvl2_model = param.ClassSelector(class_=Lvl2_Filter_Model)
+
+    def __init__(self, **params):
+        super().__init__(**params)
+
+        self.unique_model = ConfigUniqueModel(lv2_model=self.lvl2_model)
+
+        self.selector_command = ConfigUniqueSelector(name="One Configuration Selection", model=self.unique_model)
+
+        self.pan1 = ExecutionColumn(
+            exec_model=ExecUniqueModel(unique_conf_model=self.unique_model),
+            name="Execution 1",
+            noise_scale=noiseScale
+        )
+
+        self.pan2 = ExecutionColumn(
+            exec_model=ExecUniqueModel(unique_conf_model=self.unique_model),
+            name="Execution 2",
+            noise_scale=noiseScale
+        )
+
+        self.warning = pn.pane.Markdown("Aucune configuration sélectionnée ou aucune donnée.")
+        self.warning.visible = False  # initialement caché
+
+        self.main_panel = pn.Column(
+            self.selector_command,
+            pn.Row(self.pan1, self.pan2, sizing_mode="stretch_width"),
+            sizing_mode="stretch_width",
+            visible=False  # initialement caché
+        )
+
+        self.view = pn.Column(self.warning, self.main_panel)
+
+        # Mise à jour initiale
+        self._update_visibility()
+
+        # Lier la mise à jour à des changements
+        self.lvl2_model.param.watch(self._update_visibility, ['value_commands', 'value_sha1'])
+
+    def _update_visibility(self, *_):
+        visible = bool(self.unique_model.options)
+
+        self.main_panel.visible = visible
+        self.warning.visible = not visible
+
+    def __panel__(self):
+        return self.view
+
 
 class ConfigUniqueSelector(pn.viewable.Viewer):
     model = param.ClassSelector(class_=ConfigUniqueModel)
