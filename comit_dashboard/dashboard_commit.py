@@ -610,7 +610,8 @@ class ExecUniqueModel(param.Parameterized):
         opts = (df_exec.reset_index()[['log_hash', 'Date_Execution', 'sha1']]
                 .drop_duplicates()
                 .sort_values('Date_Execution')
-                .reset_index(drop=True))
+                .set_index('log_hash')
+                )                
         opts['label'] = opts['sha1'] + "_" + opts['Date_Execution'].dt.strftime('%Y-%m-%d %H:%M:%S') 
         return opts['label'].to_dict()
 
@@ -1035,15 +1036,9 @@ class ExecUniqueSelector(pn.viewable.Viewer):
 
         self._syncing = True
         try:
-            label_map = self.execUniqueModel.label_map  # dict {label: log_hash}
+            label_map = self.execUniqueModel.label_map  # dict {log_hash : label}
             self.exec_selector.options = list(label_map.keys())
-
-            # Retrouver le label associé à la valeur courante
-            current_hash = self.execUniqueModel.log_hash
-            label_selected = next((label for label, val in label_map.items()
-                                   if val == current_hash), None)
-
-            self.exec_selector.value = label_selected
+            self.exec_selector.value = label_map[self.execUniqueModel.log_hash] if self.execUniqueModel.log_hash else None
 
         finally:
             self._syncing = False
