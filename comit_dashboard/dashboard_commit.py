@@ -830,7 +830,7 @@ class CodeSelector(pn.viewable.Viewer):
         self.widget.value = self.cmd_filter_model.param['code'].default  # Affecte la valeur par défaut des codes     
         self.widget.param.watch(self._update_filter, 'value')
         
-        self.select_all_button = pn.widgets.Button(name='🔄', button_type='primary', width = BUTON_WIDTH)
+        self.select_all_button = pn.widgets.Button(name='Reset', button_type='primary', width = BUTON_WIDTH)
         self.select_all_button.on_click(self.select_all_codes)
 
     def select_all_codes(self, event):
@@ -910,7 +910,7 @@ class Lvl2_ConfigPanel(pn.viewable.Viewer):
     def __init__(self, **params):
         super().__init__(**params)
         self.config_selector = pn.widgets.MultiChoice(name="Sélectionnez les configurations", options=[], sizing_mode="stretch_width")
-        self.clear_button = pn.widgets.Button(name="🔄", button_type="warning", width = BUTON_WIDTH)
+        self.clear_button = pn.widgets.Button(name="Reset", button_type="warning", width = BUTON_WIDTH)
         self.dialog = pn.pane.Alert(alert_type="danger", visible=False, sizing_mode="stretch_width")
 
         self.clear_button.on_click(self.clear_configs)
@@ -950,7 +950,7 @@ class Lvl2_Git_Selector(pn.viewable.Viewer):
         super().__init__(**params)
         self.git_selector = pn.widgets.MultiChoice(name="Sélectionnez les commits", options=[], sizing_mode="stretch_width")
         self.select_all_button = pn.widgets.Button(name="Tout", button_type="success" , width = BUTON_WIDTH)
-        self.clear_button = pn.widgets.Button(name="🔄", button_type="warning", width = BUTON_WIDTH)
+        self.clear_button = pn.widgets.Button(name="Reset", button_type="warning", width = BUTON_WIDTH)
         self.dialog = pn.pane.Alert(alert_type="danger", visible=False, sizing_mode="stretch_width")
 
         self.select_all_button.on_click(self.select_all_sha1)
