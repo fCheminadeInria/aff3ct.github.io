@@ -118,18 +118,26 @@ def apply_typing_code():
     ''' Applique le typage des données  (copier coller du résultat de generate_typing_code) ''' 
     # Typage pour runs
     runs = pn.state.cache['db']['runs']
-    runs['Bit Error Rate (BER) and Frame Error Rate (FER).BE'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).BE'], errors='coerce').astype('Int64')
-    runs['Bit Error Rate (BER) and Frame Error Rate (FER).BER'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).BER'], errors='coerce')
-    runs['Bit Error Rate (BER) and Frame Error Rate (FER).FE'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).FE'], errors='coerce').astype('Int64')
-    runs['Bit Error Rate (BER) and Frame Error Rate (FER).FER'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).FER'], errors='coerce')
-    runs['Bit Error Rate (BER) and Frame Error Rate (FER).FRA'] = pd.to_numeric(runs['Bit Error Rate (BER) and Frame Error Rate (FER).FRA'], errors='coerce').astype('Int64')
-    runs['Global throughputand elapsed time.SIM_THR(Mb/s)'] = pd.to_numeric(runs['Global throughputand elapsed time.SIM_THR(Mb/s)'], errors='coerce')
-    runs['Global throughputand elapsed time.elapse_time(ns)'] = pd.to_numeric(runs['Global throughputand elapsed time.elapse_time(ns)'], errors='coerce')
-    runs['Signal Noise Ratio(SNR).Eb/N0(dB)'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Eb/N0(dB)'], errors='coerce')
-    runs['Signal Noise Ratio(SNR).Es/N0(dB)'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Es/N0(dB)'], errors='coerce')
-    runs['Signal Noise Ratio(SNR).Sigma'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Sigma'], errors='coerce')
-    runs['Signal Noise Ratio(SNR).Event Probability'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Event Probability'], errors='coerce')
-    runs['Signal Noise Ratio(SNR).Received Optical'] = pd.to_numeric(runs['Signal Noise Ratio(SNR).Received Optical'], errors='coerce')
+    
+    to_convert = {
+        'Bit Error Rate (BER) and Frame Error Rate (FER).BE': 'Int64',
+        'Bit Error Rate (BER) and Frame Error Rate (FER).BER': 'float',
+        'Bit Error Rate (BER) and Frame Error Rate (FER).FE': 'Int64',
+        'Bit Error Rate (BER) and Frame Error Rate (FER).FER': 'float',
+        'Bit Error Rate (BER) and Frame Error Rate (FER).FRA': 'Int64',
+        'Global throughputand elapsed time.SIM_THR(Mb/s)': 'float',
+        'Global throughputand elapsed time.elapse_time(ns)': 'float',
+        'Signal Noise Ratio(SNR).Eb/N0(dB)': 'float',
+        'Signal Noise Ratio(SNR).Es/N0(dB)': 'float',
+        'Signal Noise Ratio(SNR).Sigma': 'float',
+        'Signal Noise Ratio(SNR).Event Probability': 'float',
+        'Signal Noise Ratio(SNR).Received Optical': 'float',
+    }
+
+    for col, dtype in to_convert.items():
+        runs[col] = pd.to_numeric(runs[col], errors='coerce')
+        if dtype == 'Int64':
+            runs[col] = runs[col].astype('Int64')
     pn.state.cache['db']['runs'] = runs
 
     # Typage pour git
@@ -393,6 +401,53 @@ class GitFilterModel(param.Parameterized):
     
     def get_sha1_valids(self):
         return self.df_git.index.unique()
+
+    @param.depends('df_git', watch=True)
+    def load_runs_from_commit(self):
+        """Charge les runs associées à une liste de commits s'ils ne sont pas déjà en mémoire."""
+
+        db = pn.state.cache['db']
+
+        # 1. SHA1 déjà chargés (on regarde les runs déjà présents et on récupère les sha1 correspondants)
+        loaded_runs = db['runs']['log_hash'].tolist()
+        loaded_sha1 = db['exec'][db['exec'].index.isin(loaded_runs)]['sha1'].tolist()
+
+        # 2. SHA1 à charger = différence
+        sha1_to_load = [sha1 for sha1 in self.get_sha1_valids() if sha1 not in loaded_sha1]
+
+        for sha1 in sha1_to_load:
+            df_runs_part = load_table(f"runs/runs_{sha1}", fmt='json')
+            if df_runs_part.empty:
+                continue  # on passe au suivant
+
+            df_runs_part.set_index('RUN_id', inplace=True)
+
+            # 3. Conversion des colonnes numériques
+            to_convert = {
+                'Bit Error Rate (BER) and Frame Error Rate (FER).BE': 'Int64',
+                'Bit Error Rate (BER) and Frame Error Rate (FER).BER': 'float',
+                'Bit Error Rate (BER) and Frame Error Rate (FER).FE': 'Int64',
+                'Bit Error Rate (BER) and Frame Error Rate (FER).FER': 'float',
+                'Bit Error Rate (BER) and Frame Error Rate (FER).FRA': 'Int64',
+                'Global throughputand elapsed time.SIM_THR(Mb/s)': 'float',
+                'Global throughputand elapsed time.elapse_time(ns)': 'float',
+                'Signal Noise Ratio(SNR).Eb/N0(dB)': 'float',
+                'Signal Noise Ratio(SNR).Es/N0(dB)': 'float',
+                'Signal Noise Ratio(SNR).Sigma': 'float',
+                'Signal Noise Ratio(SNR).Event Probability': 'float',
+                'Signal Noise Ratio(SNR).Received Optical': 'float',
+            }
+
+            for col, dtype in to_convert.items():
+                df_runs_part[col] = pd.to_numeric(df_runs_part[col], errors='coerce')
+                if dtype == 'Int64':
+                    df_runs_part[col] = df_runs_part[col].astype('Int64')
+
+            # 5. Ajout au DataFrame principal
+            db['runs'] = pd.concat([db['runs'], df_runs_part])
+
+        # 6. Mise à jour du cache
+        pn.state.cache['db'] = db
 
 class CommandFilterModel(param.Parameterized):
     """Modèle pour filtrer les commandes sur la base du filtrage de Git selon le code."""
