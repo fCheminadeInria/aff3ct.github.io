@@ -24,7 +24,7 @@ except ImportError:
 # ------------------------------------------------------------------------------
 IS_PYODIDE       = sys.platform == "emscripten"
 IS_PANEL_CONVERT = os.getenv("PANEL_CONVERT") == "1"
-GITLAB_PACKAGE_URL = "https://gitlab.inria.fr/api/v4/projects/1420/packages/generic/gitlab-elk-export/latest/"
+GITLAB_PACKAGE_URL = "https://gitlab.inria.fr/api/v4/projects/1420/packages/generic/gitlab-elk-export/latest/export/"
 BUTON_WIDTH = 60
 # ------------------------------------------------------------------------------
 #  Chargement des données – SYNCHRONE
@@ -62,7 +62,13 @@ def load_table(name: str, fmt: str = "parquet") -> pd.DataFrame:
 
     all_data.seek(0)
     if fmt == "json":
-        return pd.read_json(all_data, lines=True)
+        df = pd.read_json(all_data, lines=True)
+        if len(df) == 1 and df.isna().all(axis=None):
+            # Retrait de la ligne factice
+            empty_df = df.iloc[:0].reset_index(drop=True)
+            empty_df = empty_df.astype("string")  # Force un type neutre
+            return empty_df
+        return df
     elif fmt == "parquet":
         return pd.read_parquet(all_data)
     else:
@@ -83,7 +89,7 @@ def load_data_sync() -> None:
     db = dict()
     for table in tables:
         db[table] = load_table(table, fmt)
-        print(f"{tables.index(table) + 1}/{len(tables)} {table} chargé")
+        print(f"{tables.index(table) + 1}/{len(tables)} {table} chargé : {len(db[table])} lignes")
 
     if db['command'].empty:
         raise ValueError("Impossible de charger les données pour 'command'. Veuillez vérifier l'URL et les dépendances.")
@@ -92,6 +98,7 @@ def load_data_sync() -> None:
     db['parameters'].set_index('param_id', inplace=True)
     
     db['runs'].set_index('RUN_id', inplace=True)
+    
     db['git'].set_index('sha1', inplace=True)
 
     # Alias
@@ -133,11 +140,13 @@ def apply_typing_code():
         'Signal Noise Ratio(SNR).Event Probability': 'float',
         'Signal Noise Ratio(SNR).Received Optical': 'float',
     }
-
+    
     for col, dtype in to_convert.items():
         runs[col] = pd.to_numeric(runs[col], errors='coerce')
         if dtype == 'Int64':
             runs[col] = runs[col].astype('Int64')
+            
+            
     pn.state.cache['db']['runs'] = runs
 
     # Typage pour git
@@ -178,7 +187,6 @@ def init_dashboard():
         )
     )
 
-
     lvl3 = Level3(lvl2_model=lvl2_model)
 
     panelData = pn.Column(
@@ -194,10 +202,7 @@ def init_dashboard():
             name="Executions en base",
             value=db['exec'].shape[0] if not db['exec'].empty else 0
         ),
-        pn.indicators.Number(
-            name="Executions par pas de SNR en base",
-            value=db['runs'].shape[0] if not db['runs'].empty else 0
-        ), 
+        RunsCountIndicator(git_filter=git_model), 
         sizing_mode="stretch_width")
 
     dashboard = pn.Column(
@@ -382,9 +387,16 @@ class GitFilterModel(param.Parameterized):
         super().__init__(**params)
         # Si date_range n'est pas fourni, on initialise avec la plage complète des dates
         db = pn.state.cache['db']
+        if db['runs'].empty:
+            loaded_runs=[]
+        else:
+            loaded_runs = db['runs']['log_hash'].tolist()
+        loaded_sha1 = db['exec'][db['exec'].index.isin(loaded_runs)]['sha1'].tolist()
+        
+        git_exec = db['git'][db['git'].index.isin(loaded_sha1)]
         
         if self.date_range == (None, None):
-            min_date = db ['git']['date'].min()
+            min_date = git_exec['date'].min() if not git_exec.empty else db ['git']['date'].max()
             max_date = db ['git']['date'].max()
             self.date_range = (min_date, max_date)
 
@@ -409,11 +421,15 @@ class GitFilterModel(param.Parameterized):
         db = pn.state.cache['db']
 
         # 1. SHA1 déjà chargés (on regarde les runs déjà présents et on récupère les sha1 correspondants)
-        loaded_runs = db['runs']['log_hash'].tolist()
+        if db['runs'].empty:
+            loaded_runs =[]
+        else:    
+            loaded_runs = db['runs']['log_hash'].tolist()
         loaded_sha1 = db['exec'][db['exec'].index.isin(loaded_runs)]['sha1'].tolist()
 
-        # 2. SHA1 à charger = différence
-        sha1_to_load = [sha1 for sha1 in self.get_sha1_valids() if sha1 not in loaded_sha1]
+        # 2. SHA1 à charger = différence parmi ceux qui ont une execution
+        sha1_to_load = self.get_sha1_valids().difference(loaded_sha1)
+        sha1_to_load = sha1_to_load.intersection(db['exec']['sha1'])
 
         for sha1 in sha1_to_load:
             df_runs_part = load_table(f"runs/runs_{sha1}", fmt='json')
@@ -485,13 +501,21 @@ class CommandFilterModel(param.Parameterized):
         
         self.param.code.objects  = sorted(commands['code'].dropna().unique().tolist())
         
+        
+        index_name = df_exec.index.name
         # ajoute les command_id à exec élimine les lignes sans correspondance de command_id
-        df_exec = df_exec.merge(
-            commands[['code']],
-            left_on='Command_id',
-            right_index=True,
-            how='inner'
+        df_exec = (
+            df_exec
+            .reset_index()  
+            .merge(
+                commands[['code']],
+                left_on='Command_id',
+                right_index=True,
+                how='inner'
+            )
+            .set_index('log_hash')
         )
+                
         self.df_exec =  df_exec
         self.param.trigger('df_exec')
         
@@ -514,13 +538,12 @@ class CommandFilterModel(param.Parameterized):
         Returns:
             list: identifiants des commandes filtrées.
         """
-        return self.df_commands().index.tolist()
+        return self.df_commands.index.tolist()
     
     
 ################################################
 ## Gestion des données niveau 2 avec filtrage ##
 ################################################
-
 class Lvl2_Filter_Model(param.Parameterized):
     command_filter = param.ClassSelector(class_=CommandFilterModel)
     value_commands = param.List(default=[])          # liste d’index (command_id) sélectionnés via les commits
@@ -583,12 +606,17 @@ class Lvl2_Filter_Model(param.Parameterized):
         
         sel = runs[runs["log_hash"].isin(self.df_exec.index)]
         # ajoute la colonne sha1 issue du DataFrame self.df
-        sel = sel.merge(
-            self.df_exec[['sha1', 'Command_id']],
-            left_on='log_hash',
-            right_index=True,
-            how='inner'
+        sel = (
+            sel.reset_index()
+            .merge(
+                self.df_exec[['sha1', 'Command_id']],
+                left_on='log_hash',
+                right_index=True,
+                how='inner'
+            )
+            .set_index(runs.index.name)
         )
+            
         return sel
 
     def reset_commands(self):
@@ -760,20 +788,21 @@ class DateRangeFilter(pn.viewable.Viewer):
         
         start, end = df['date'].min(), df['date'].max()
         
-        # Forcer la plage de dates dans le modèle si elle est incorrecte ou absente
-        if not hasattr(self.git_filter, 'date_range') or self.git_filter.date_range is None:
-            self.git_filter.date_range = (start, end)
-        
         # Création du slider
         self.slider = pn.widgets.DatetimeRangeSlider(
             name='Filtre sur les dates des commits',
             start=start,
             end=end,
-            value=(start, end),
+            value=self.git_filter.date_range,
             sizing_mode='stretch_width',
             step = 300,
         )
-        self.slider.param.watch( lambda event: setattr(self.git_filter, 'date_range', event.new),'value')
+        
+        self.slider.param.watch(
+            lambda event: setattr(self.git_filter, 'date_range', event.new),
+            'value_throttled'
+        )
+
 
     def __panel__(self):
         return self.slider
@@ -950,6 +979,32 @@ class GitIndicators(pn.viewable.Viewer):
 
     def __panel__(self):
         return pn.Row(self.commit_count, self.git_version_count, self.last_commit_text)
+
+
+class RunsCountIndicator(pn.viewable.Viewer):
+    git_filter = param.ClassSelector(class_=GitFilterModel)
+
+    def __init__(self, **params):
+        super().__init__(**params)
+
+        # Initialisation du widget
+        self.indicator = pn.indicators.Number(
+            name="Exécutions par pas de SNR en base",
+            value=self._compute_value(),
+        )
+
+        # Met à jour automatiquement si le modèle change
+        self.git_filter.param.watch(self._update_value, 'date_range')
+
+    def _compute_value(self):
+        db = pn.state.cache.get('db')
+        return db['runs'].shape[0] if not db['runs'].empty else 0
+
+    def _update_value(self, event=None):
+        self.indicator.value = self._compute_value()
+
+    def __panel__(self):
+        return self.indicator
 
 ##################################### Niveau 2 : Commandes ####################################
 
