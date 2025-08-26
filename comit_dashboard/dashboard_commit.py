@@ -678,7 +678,7 @@ class ExecUniqueModel(param.Parameterized):
     trig_opt_changed = param.Event()
 
     # Mise à jour automatique quand le modèle parent change
-    @param.depends('unique_conf_model.config', watch=True)
+    @param.depends('unique_conf_model.config', 'unique_conf_model.lv2_model.value_sha1', watch=True)
     def _update_exec(self):
         """Construit la liste des exécutions disponibles et met à jour le sélecteur."""
         df_exec = self.unique_conf_model.df_exec
