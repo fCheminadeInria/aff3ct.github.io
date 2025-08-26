@@ -818,7 +818,7 @@ class PerformanceByCommit(pn.viewable.Viewer):
 
         self.tabs = pn.Tabs(
             ('⏱️ Latence', self.plot_latency_pane),
-            ('📶 Débit', self.plot_throughput_pane),
+            ('⚡ Débit', self.plot_throughput_pane),
             dynamic=True
         )
 
