@@ -133,7 +133,7 @@ def apply_typing_code():
         'Bit Error Rate (BER) and Frame Error Rate (FER).FER': 'float',
         'Bit Error Rate (BER) and Frame Error Rate (FER).FRA': 'Int64',
         'Global throughputand elapsed time.SIM_THR(Mb/s)': 'float',
-        'Global throughputand elapsed time.elapse_time(ns)': 'float',
+        'Global throughputand elapsed time.elapse_time(ms)': 'float',
         'Signal Noise Ratio(SNR).Eb/N0(dB)': 'float',
         'Signal Noise Ratio(SNR).Es/N0(dB)': 'float',
         'Signal Noise Ratio(SNR).Sigma': 'float',
@@ -446,7 +446,7 @@ class GitFilterModel(param.Parameterized):
                 'Bit Error Rate (BER) and Frame Error Rate (FER).FER': 'float',
                 'Bit Error Rate (BER) and Frame Error Rate (FER).FRA': 'Int64',
                 'Global throughputand elapsed time.SIM_THR(Mb/s)': 'float',
-                'Global throughputand elapsed time.elapse_time(ns)': 'float',
+                'Global throughputand elapsed time.elapse_time(ms)': 'float',
                 'Signal Noise Ratio(SNR).Eb/N0(dB)': 'float',
                 'Signal Noise Ratio(SNR).Es/N0(dB)': 'float',
                 'Signal Noise Ratio(SNR).Sigma': 'float',
@@ -835,14 +835,14 @@ class PerformanceByCommit(pn.viewable.Viewer):
 
     def _update_data(self):
         throughput_col = 'Global throughputand elapsed time.SIM_THR(Mb/s)'
-        latency_col = 'Global throughputand elapsed time.elapse_time(ns)'
+        latency_col = 'Global throughputand elapsed time.elapse_time(ms)'
 
         db = pn.state.cache['db']
         df_exec = self.command_filter.df_exec
 
         if df_exec.empty:
             # Crée un DataFrame vide avec colonnes attendues
-            self.df_grouped = pd.DataFrame(columns=['sha1', 'Code', 'Débit moyen (Mb/s)', 'Latence moyenne (ns)', 'date'])
+            self.df_grouped = pd.DataFrame(columns=['sha1', 'Code', 'Débit moyen (Mb/s)', 'Latence moyenne (ms)', 'date'])
             return
 
         df_exec = df_exec.merge(
@@ -858,7 +858,7 @@ class PerformanceByCommit(pn.viewable.Viewer):
             'date': 'first'
         }).reset_index().rename(columns={
             throughput_col: 'Débit moyen (Mb/s)',
-            latency_col: 'Latence moyenne (ns)',
+            latency_col: 'Latence moyenne (ms)',
             'code': 'Code',
         }).sort_values(by='date')
 
@@ -883,7 +883,7 @@ class PerformanceByCommit(pn.viewable.Viewer):
 
         self.plot_latency_pane.object = px.line(
             self.df_grouped,
-            x='date', y='Latence moyenne (ns)',
+            x='date', y='Latence moyenne (ms)',
             color='Code',
             title="Latence moyenne par commit (par code)",
             markers=True
@@ -891,7 +891,7 @@ class PerformanceByCommit(pn.viewable.Viewer):
             legend=dict(orientation='v', y=1, x=1.05),
             margin=dict(r=100),
             xaxis=dict(title="Date", rangeslider=dict(visible=True), showgrid=True),
-            yaxis=dict(title="Latence moyenne (ns)", showgrid=True),
+            yaxis=dict(title="Latence moyenne (ms)", showgrid=True),
         )
         if self.df_grouped.empty:
             self.plot_latency_pane.object.add_annotation(text="Aucune donnée sélectionnée",
