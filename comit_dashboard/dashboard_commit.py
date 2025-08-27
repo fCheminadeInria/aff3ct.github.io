@@ -191,11 +191,11 @@ def init_dashboard():
 
     panelData = pn.Column(
         pn.indicators.Number(
-        name="Commit en base",
+        name="Commits en base",
         value=db['git'].shape[0] if not db['git'].empty else 0
         ),
         pn.indicators.Number(
-        name="Commands en base",
+        name="Commandes en base",
         value=db['command'].shape[0] if not db['command'].empty else 0
         ), 
         pn.indicators.Number(
@@ -222,7 +222,7 @@ def init_dashboard():
     )
 
     template = pn.template.FastListTemplate(
-        title="Commits Dashboard",
+        title="Tableau de bord de suivi des commits",
         sidebar=[logo, noiseScale, pn.layout.Divider(), panelData],
         main=[dashboard],
         main_layout=None,
@@ -955,7 +955,7 @@ class GitIndicators(pn.viewable.Viewer):
     def __init__(self, **params):
         super().__init__(**params)
 
-        self.commit_count = pn.indicators.Number(name="Commits Sélectionnés", value=0)
+        self.commit_count = pn.indicators.Number(name="Commits sélectionnés", value=0)
         self.git_version_count = pn.indicators.Number(name="avec données", value=0)
         self.last_commit_text = pn.widgets.StaticText(name="Date du dernier commit")
 
@@ -989,7 +989,7 @@ class RunsCountIndicator(pn.viewable.Viewer):
 
         # Initialisation du widget
         self.indicator = pn.indicators.Number(
-            name="Exécutions par pas de SNR en base",
+            name="Exécutions par pas de SNR chargés en base",
             value=self._compute_value(),
         )
 
