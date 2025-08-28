@@ -132,8 +132,8 @@ def apply_typing_code():
         'Bit Error Rate (BER) and Frame Error Rate (FER).FE': 'Int64',
         'Bit Error Rate (BER) and Frame Error Rate (FER).FER': 'float',
         'Bit Error Rate (BER) and Frame Error Rate (FER).FRA': 'Int64',
-        'Global throughputand elapsed time.SIM_THR(Mb/s)': 'float',
-        'Global throughputand elapsed time.elapse_time(ms)': 'float',
+        'Global throughput and elapsed time.SIM_THR(Mb/s)': 'float',
+        'Global throughput and elapsed time.elapse_time(ms)': 'float',
         'Signal Noise Ratio(SNR).Eb/N0(dB)': 'float',
         'Signal Noise Ratio(SNR).Es/N0(dB)': 'float',
         'Signal Noise Ratio(SNR).Sigma': 'float',
@@ -445,8 +445,8 @@ class GitFilterModel(param.Parameterized):
                 'Bit Error Rate (BER) and Frame Error Rate (FER).FE': 'Int64',
                 'Bit Error Rate (BER) and Frame Error Rate (FER).FER': 'float',
                 'Bit Error Rate (BER) and Frame Error Rate (FER).FRA': 'Int64',
-                'Global throughputand elapsed time.SIM_THR(Mb/s)': 'float',
-                'Global throughputand elapsed time.elapse_time(ms)': 'float',
+                'Global throughput and elapsed time.SIM_THR(Mb/s)': 'float',
+                'Global throughput and elapsed time.elapse_time(ms)': 'float',
                 'Signal Noise Ratio(SNR).Eb/N0(dB)': 'float',
                 'Signal Noise Ratio(SNR).Es/N0(dB)': 'float',
                 'Signal Noise Ratio(SNR).Sigma': 'float',
@@ -834,8 +834,8 @@ class PerformanceByCommit(pn.viewable.Viewer):
         self._create_plots()
 
     def _update_data(self):
-        throughput_col = 'Global throughputand elapsed time.SIM_THR(Mb/s)'
-        latency_col = 'Global throughputand elapsed time.elapse_time(ms)'
+        throughput_col = 'Global throughput and elapsed time.SIM_THR(Mb/s)'
+        latency_col = 'Global throughput and elapsed time.elapse_time(ms)'
 
         db = pn.state.cache['db']
         df_exec = self.command_filter.df_exec
